@@ -20,6 +20,7 @@ Each term has one meaning in the project. Use each term exactly as written.
 | Wind Grid | The 3D grid of 256 x 128 x 256 cells, 32 m per cell, that covers the air above the terrain. |
 | Scenario | One folder of input files: an elevation file, a fuel file, and a `scenario.json` file. |
 | Canyon Generator | The editor tool that writes a synthetic Scenario. |
+| Ground Image | The optional color image of the ground of a Scenario. The terrain shows the Ground Image in place of the fuel color. |
 | Fuel Table | The table of fuel model parameters and the constants computed from the parameters. |
 | Spread Solver | The compute shader system that computes fire behavior and moves the fire across the Fire Grid. |
 | Spread A, Spread B | The two Fire Grid textures that hold the per-cell fire behavior values. |

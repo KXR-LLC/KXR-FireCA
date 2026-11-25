@@ -395,6 +395,13 @@ namespace FireCA
             _opacity.RegisterValueChangedCallback(e => _app.Overlays.SetOpacity(e.newValue));
             section.Add(_opacity);
 
+            DisplaySlider(section, "Fuel color smoothing (m)", "fuel-color-smoothing", 0f, Overlays.MaxFuelColorSmoothingM,
+                _app.Overlays.FuelColorSmoothingM, v => _app.Overlays.SetFuelColorSmoothing(v));
+
+            // The slider has an effect when the Scenario has a Ground Image.
+            DisplaySlider(section, "Ground Image opacity", "ground-image-opacity", 0f, 1f,
+                _app.Overlays.GroundImageOpacity, v => _app.Overlays.SetGroundImageOpacity(v));
+
             _legend = new VisualElement { name = "overlay-legend" };
             _legend.style.marginTop = 8;
             section.Add(_legend);
@@ -442,17 +449,25 @@ namespace FireCA
             return toggle;
         }
 
+        Slider DisplaySlider(VisualElement parent, string label, string name, float low, float high, float value, System.Action<float> onChange)
+        {
+            parent.Add(UiStyle.Text_(label, 11, false, UiStyle.DimText));
+            var slider = new Slider(low, high) { value = value, showInputField = true, name = name };
+            slider.style.marginLeft = 0; slider.style.marginRight = 0;
+            slider.RegisterValueChangedCallback(e => onChange(e.newValue));
+            parent.Add(slider);
+            return slider;
+        }
+
         void BuildWindDisplay(VisualElement section)
         {
             var particles = FindFirstObjectByType<WindParticles>();
             var slice = FindFirstObjectByType<SlicePlane>();
 
             DisplayToggle(section, "Smoke", _app.SmokeVisible, on => _app.SmokeVisible = on).name = "smoke";
-            section.Add(UiStyle.Text_("Smoke density", 11, false, UiStyle.DimText));
-            var smokeDensity = new Slider(0f, 4f) { value = _app.SmokeDensity, showInputField = true, name = "smoke-density" };
-            smokeDensity.style.marginLeft = 0; smokeDensity.style.marginRight = 0;
-            smokeDensity.RegisterValueChangedCallback(e => _app.SmokeDensity = e.newValue);
-            section.Add(smokeDensity);
+            DisplaySlider(section, "Smoke density", "smoke-density", 0f, FireCAApp.MaxSmokeDensity, _app.SmokeDensity, v => _app.SmokeDensity = v);
+            DisplaySlider(section, "Smoke darkness", "smoke-darkness", 0f, 1f, _app.SmokeDarkness, v => _app.SmokeDarkness = v);
+            DisplaySlider(section, "Smoke billows", "smoke-billows", 0f, 1f, _app.SmokeBillows, v => _app.SmokeBillows = v);
 
             if (particles != null)
             {
@@ -467,6 +482,7 @@ namespace FireCA
                     _particleCountLabel.text = $"Particle count: {particles.Count:N0}";
                 });
                 section.Add(count);
+                DisplaySlider(section, "Particle size (m)", "wind-particle-size", 0f, WindParticles.MaxSizeM, particles.SizeM, v => particles.SetSize(v));
             }
 
             if (slice != null)

@@ -59,6 +59,44 @@ namespace FireCA
         public OverlayInfo Selected { get; private set; }
         public float Opacity { get; private set; } = DefaultOpacity;
 
+        public const float DefaultFuelColorSmoothingM = 24f;
+        public const float MaxFuelColorSmoothingM = 60f;
+        static readonly int TerrainParamsId = Shader.PropertyToID("_FireCA_TerrainParams");
+
+        /// <summary>
+        /// The width of the fuel color smoothing, m. The value 0 shows the fuel color of each Fire Grid cell.
+        /// The smoothing changes the fuel color layer only (docs/decisions.md, decision D28).
+        /// </summary>
+        public float FuelColorSmoothingM { get; private set; } = DefaultFuelColorSmoothingM;
+
+        static readonly int GroundImageId = Shader.PropertyToID("_FireCA_GroundImage");
+
+        /// <summary>The Ground Image of the loaded Scenario, or null (docs/decisions.md, decision D29).</summary>
+        public Texture2D GroundImage { get; private set; }
+        /// <summary>The share of the Ground Image in the ground color, from 0 to 1. The rest is the fuel color.</summary>
+        public float GroundImageOpacity { get; private set; } = 1f;
+
+        /// <summary>Takes the Ground Image of a Scenario and destroys the Ground Image of the Scenario before.</summary>
+        public void SetGroundImage(Texture2D image)
+        {
+            if (GroundImage != null && GroundImage != image) UnityEngine.Object.Destroy(GroundImage);
+            GroundImage = image;
+            Shader.SetGlobalTexture(GroundImageId, image != null ? image : Texture2D.blackTexture);
+            Apply();
+        }
+
+        public void SetGroundImageOpacity(float opacity)
+        {
+            GroundImageOpacity = Mathf.Clamp01(opacity);
+            Apply();
+        }
+
+        public void SetFuelColorSmoothing(float meters)
+        {
+            FuelColorSmoothingM = Mathf.Clamp(meters, 0f, MaxFuelColorSmoothingM);
+            Apply();
+        }
+
         public Overlays()
         {
             ColorMap = BuildColorMap();
@@ -66,6 +104,7 @@ namespace FireCA
             Shader.SetGlobalTexture(ColorMapId, ColorMap);
             Shader.SetGlobalTexture(FuelPaletteId, FuelPalette);
             Shader.SetGlobalVector(GridParamsId, Vector4.zero);
+            Shader.SetGlobalTexture(GroundImageId, Texture2D.blackTexture);
             Apply();
         }
 
@@ -164,6 +203,7 @@ namespace FireCA
         void Apply()
         {
             Shader.SetGlobalVector(OverlayParamsId, new Vector4(Selected != null ? Selected.Id : 0, Opacity, 0f, 0f));
+            Shader.SetGlobalVector(TerrainParamsId, new Vector4(FuelColorSmoothingM, GroundImage != null ? GroundImageOpacity : 0f, 0f, 0f));
         }
 
         public static OverlayInfo Find(string name)

@@ -14,15 +14,18 @@ Readers:
 Usage:
     python import_canyon.py --elevation dem.tif --fuel fbfm13.tif --out <Scenario folder>
         [--name south-canyon] [--grid-size 4096] [--west E --south N] [--settings scenario.json]
-        [--latitude DEG] [--utm-zone N] [--reader auto|gdal|tifffile]
+        [--ground-image image.jpg] [--latitude DEG] [--utm-zone N] [--reader auto|gdal|tifffile]
 
     --west, --south   The southwest corner of the Fire Grid, in the coordinate system of the elevation raster.
                       The default is the southwest corner of the elevation raster.
     --settings        A scenario.json file with weather, moisture, date, and ignition values to keep.
                       The script always writes the name, the grid values, the file names, and the latitude.
+    --ground-image    A JPEG or PNG color image that covers exactly the Fire Grid, with the north row first.
+                      The script copies the file to the Scenario folder and does not resample it.
 """
 import argparse
 import json
+import shutil
 import math
 import os
 import sys
@@ -279,6 +282,8 @@ def main(argv=None):
     parser.add_argument("--west", type=float, help="West edge of the Fire Grid, in the coordinate system of the elevation raster")
     parser.add_argument("--south", type=float, help="South edge of the Fire Grid")
     parser.add_argument("--settings", help="scenario.json with weather, moisture, date, and ignition values to keep")
+    parser.add_argument("--ground-image", help="JPEG or PNG color image that covers exactly the Fire Grid, north row first. "
+                        "The script copies the file to the Scenario folder as the Ground Image.")
     parser.add_argument("--latitude", type=float, help="Latitude of the site, degrees. The default comes from the coordinate system.")
     parser.add_argument("--utm-zone", type=int, help="UTM zone of the rasters, for the tifffile reader when a raster has no EPSG code")
     parser.add_argument("--reader", choices=("auto", "gdal", "tifffile"), default="auto")
@@ -340,6 +345,16 @@ def main(argv=None):
     elevation[::-1].tofile(os.path.join(args.out, "elevation.r32"))
     # fuel.png: the top row of the image is the north edge.
     Image.fromarray(fuel, "L").save(os.path.join(args.out, "fuel.png"))
+    if args.ground_image:
+        # The Ground Image: the script copies the file and does not resample it. The image must be square.
+        Image.MAX_IMAGE_PIXELS = None
+        with Image.open(args.ground_image) as image:
+            if image.width != image.height:
+                print(f"error: the Ground Image is {image.width} x {image.height}. The image must be square.", file=sys.stderr)
+                return 1
+        ground_name = "ground" + os.path.splitext(args.ground_image)[1].lower()
+        shutil.copyfile(args.ground_image, os.path.join(args.out, ground_name))
+        scenario["groundImageFile"] = ground_name
     with open(os.path.join(args.out, "scenario.json"), "w") as handle:
         json.dump(scenario, handle, indent=2)
         handle.write("\n")

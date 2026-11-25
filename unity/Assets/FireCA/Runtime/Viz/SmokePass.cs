@@ -34,7 +34,7 @@ namespace FireCA
             float day = Mathf.Clamp01(sun.y * 4f);
             Color sky = Color.Lerp(new Color(2f, 2.5f, 4f), new Color(3500f, 4200f, 5200f), day);
 
-            ctx.propertyBlock.SetVector(SmokeParamsId, new Vector4(app.SmokeDensity, 0f, 0f, 0f));
+            ctx.propertyBlock.SetVector(SmokeParamsId, new Vector4(app.SmokeDensity, Mathf.Clamp01(app.SmokeDarkness), Mathf.Clamp01(app.SmokeBillows), 0f));
             ctx.propertyBlock.SetVector(SunDirectionId, new Vector4(sun.x, Mathf.Max(sun.y, 0.02f), sun.z, 0f));
             ctx.propertyBlock.SetVector(SunColorId, sunColor);
             ctx.propertyBlock.SetVector(SkyColorId, sky);

@@ -62,6 +62,72 @@ namespace FireCA.Tests
             Assert.Greater(burnable, s.Fuel.Length / 2);
         }
 
+        // ---- the Solid Mask has no pit cell (decision D27) ----
+
+        [UnityTest, Timeout(600000)]
+        public IEnumerator SolidMaskHasNoPitCell_AndSolarHeatDoesNotCollect()
+        {
+            Assert.IsTrue(_app.LoadScenario(RealScenario), _app.LastError);
+            yield return null;
+            WindSolver wind = _app.Wind;
+            WeatherModel weather = _app.Weather;
+
+            // The Scenario has a Ground Image (decision D29). A Scenario with none clears the Ground Image.
+            Assert.IsNotNull(_app.Overlays.GroundImage, "The Ground Image of south-canyon did not load.");
+            Assert.AreEqual(4096, _app.Overlays.GroundImage.width);
+            Assert.Greater(_app.Overlays.GroundImage.mipmapCount, 1);
+            Assert.AreEqual(1f, Shader.GetGlobalVector("_FireCA_TerrainParams").y);
+            Assert.Less(_app.LastLoadSeconds, 10f);
+            Debug.Log($"[FireCA test] south-canyon with the Ground Image loaded in {_app.LastLoadSeconds:F2} s.");
+            Assert.IsTrue(_app.LoadScenario("test-canyon-512"), _app.LastError);
+            Assert.IsNull(_app.Overlays.GroundImage);
+            Assert.AreEqual(0f, Shader.GetGlobalVector("_FireCA_TerrainParams").y);
+            Assert.IsTrue(_app.LoadScenario(RealScenario), _app.LastError);
+            yield return null;
+            wind = _app.Wind;
+            weather = _app.Weather;
+
+            var mask = (RenderTexture)_app.Registry.Get(SimTextures.SolidMask);
+            int w = mask.width, h = mask.height, d = mask.volumeDepth;
+            var request = AsyncGPUReadback.Request(mask, 0, 0, w, 0, h, 0, d, TextureFormat.RFloat);
+            request.WaitForCompletion();
+            Assert.IsFalse(request.hasError);
+            var solid = new bool[w * h * d];
+            for (int z = 0; z < d; z++)
+            {
+                var layer = request.GetData<float>(z);
+                for (int i = 0; i < w * h; i++) solid[i + z * w * h] = layer[i] > 0.5f;
+            }
+            int pits = 0;
+            for (int z = 1; z < d - 1; z++)
+                for (int y = 0; y < h; y++)
+                    for (int x = 1; x < w - 1; x++)
+                    {
+                        int i = x + y * w + z * w * h;
+                        if (!solid[i] && solid[i - 1] && solid[i + 1] && solid[i - w * h] && solid[i + w * h]) pits++;
+                    }
+            Assert.AreEqual(0, pits, "The Solid Mask holds a pit cell.");
+
+            // One simulated hour of sun from noon, with no fire. The heat of the sun must not collect in a cell.
+            wind.SpinUp();
+            WindStats stats = default;
+            for (int step = 0; step < 1800; step++)
+            {
+                wind.Step();
+                weather.Update(step * (double)wind.DtWind);
+                if (step % 300 == 299)
+                {
+                    stats = wind.ReadStats();
+                    Debug.Log($"[FireCA test] Wind step {step + 1}: highest theta {stats.ThetaMax:F2} K, peak wind speed {stats.PeakSpeed:F1} m/s.");
+                    yield return null;
+                }
+            }
+            Debug.Log($"[FireCA test] south-canyon, 1 h of sun, no fire: highest theta {stats.ThetaMax:F2} K, peak wind speed {stats.PeakSpeed:F1} m/s.");
+            Assert.AreEqual(0, stats.NonFiniteCells);
+            // A pit cell gains 5 K per 300 Wind steps and reaches 30 K. A cell with a flow through it stays near 10 K.
+            Assert.Less(stats.ThetaMax, 15f,"The heat of the sun collects in a cell of the Wind Grid.");
+        }
+
         // ---- criterion 2 ----
 
         [UnityTest, Timeout(1800000)]

@@ -185,7 +185,7 @@ namespace FireCA.Tests
                 }
             }
 
-            // Solid Mask: 1 when the center of the Wind Grid cell is below Ground Height.
+            // Solid Mask: 1 when the center of the Wind Grid cell is below Ground Height, and 1 for a pit cell.
             Assert.AreEqual(Mathf.Floor(s.MinElevation / 32f) * 32f, grid.WindBottomY);
             var mask = (RenderTexture)_app.Registry.Get(SimTextures.SolidMask);
             Assert.AreEqual(TextureDimension.Tex3D, mask.dimension);
@@ -205,7 +205,11 @@ namespace FireCA.Tests
                     {
                         float g = groundCpu[z * wx + x];
                         if (Mathf.Abs(centerY - g) < 0.02f) continue;   // too close to call in 32-bit float
-                        bool expected = centerY < g;
+                        // A pit cell is solid too: an air cell with a solid cell on all four sides (decision D27).
+                        bool pit = x > 0 && x < wx - 1 && z > 0 && z < wz - 1
+                            && centerY < groundCpu[z * wx + x - 1] && centerY < groundCpu[z * wx + x + 1]
+                            && centerY < groundCpu[(z - 1) * wx + x] && centerY < groundCpu[(z + 1) * wx + x];
+                        bool expected = centerY < g || pit;
                         bool actual = layer[y * wx + x] > 127;
                         if (expected != actual) mismatches++;
                         if (actual) solid++;

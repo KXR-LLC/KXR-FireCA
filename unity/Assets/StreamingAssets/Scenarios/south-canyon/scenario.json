@@ -55,5 +55,6 @@
       "zM": 3680.0,
       "radiusM": 6.0
     }
-  ]
+  ],
+  "groundImageFile": "ground.jpg"
 }

@@ -18,6 +18,8 @@ namespace FireCA
         public float MinElevation;
         public float MaxElevation;
         public GridSpec Grid;
+        /// <summary>The path of the Ground Image file, or null when the Scenario has none.</summary>
+        public string GroundImagePath;
     }
 
     /// <summary>The Scenario loader. Reads and validates the three files of a Scenario folder.</summary>
@@ -83,6 +85,14 @@ namespace FireCA
                 throw new ScenarioException(ScenarioCheck.ScenarioFiles, $"{data.fuelFile}: {e.Message}");
             }
             ScenarioValidation.CheckFuelImageSize(data, width, height);
+
+            string groundImagePath = null;
+            if (!string.IsNullOrEmpty(data.groundImageFile))
+            {
+                groundImagePath = Path.Combine(folder, data.groundImageFile);
+                if (!File.Exists(groundImagePath))
+                    throw new ScenarioException(ScenarioCheck.ScenarioFiles, $"The Ground Image file '{data.groundImageFile}' is not in the folder.");
+            }
             ScenarioValidation.CheckSettings(data);
 
             byte[] fuel;
@@ -106,6 +116,7 @@ namespace FireCA
                 MinElevation = min,
                 MaxElevation = max,
                 Grid = new GridSpec(data.gridSize, min),
+                GroundImagePath = groundImagePath,
             };
         }
 

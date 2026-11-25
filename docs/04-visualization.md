@@ -22,7 +22,7 @@ The terrain shader is an HDRP Lit Shader Graph with one Custom Function node for
 
 | Order | Layer | Source | Behavior |
 |---|---|---|---|
-| 1 | Fuel color | Fuel | A natural color per fuel code, with a small noise variation |
+| 1 | Fuel color | Fuel | A natural color per fuel code, with a small noise variation. The fuel color smoothing of decision D28 in `decisions.md` blends the colors of nearby cells. When the Scenario has a Ground Image, the Ground Image replaces the fuel color (decision D29). |
 | 2 | Overlay | The selected Overlay | Blends over the fuel color with the Overlay opacity |
 | 3 | Burn scar | Arrival Time | Darkens an ignited cell to char black, then to ash gray after `sourceHoldS` |
 | 4 | Fire glow | Arrival Time, Spread B | Emissive color on flaming and smoldering cells |

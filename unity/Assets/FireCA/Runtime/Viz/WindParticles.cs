@@ -26,6 +26,11 @@ namespace FireCA
         public float MaxHeightM = 400f;
         /// <summary>Brightness of one streak. The streaks add up where many particles overlap.</summary>
         public float Brightness = 0.28f;
+        public const float MaxSizeM = 40f;
+        /// <summary>The width of one streak, m. At 0, a streak is 1 pixel wide.</summary>
+        public float SizeM { get; private set; }
+
+        public void SetSize(float meters) => SizeM = Mathf.Clamp(meters, 0f, MaxSizeM);
 
         public bool Visible { get; set; } = true;
         public int Count { get; private set; } = DefaultCount;
@@ -98,6 +103,7 @@ namespace FireCA
             _material.SetFloat("_SpeedScale", ParticleSpeedScale);
             _material.SetFloat("_LifeS", LifeS);
             _material.SetFloat("_Brightness", Brightness);
+            _material.SetFloat("_SizeM", SizeM);
             float extent = grid.ExtentM;
             var bounds = new Bounds(new Vector3(extent * 0.5f, grid.WindBottomY + 2048f, extent * 0.5f), new Vector3(extent, 4096f, extent) * 1.2f);
             var parameters = new RenderParams(_material)
@@ -106,7 +112,7 @@ namespace FireCA
                 shadowCastingMode = ShadowCastingMode.Off,
                 receiveShadows = false,
             };
-            Graphics.RenderPrimitives(parameters, MeshTopology.Lines, Count * 2);
+            Graphics.RenderPrimitives(parameters, MeshTopology.Triangles, Count * 6);
         }
     }
 }

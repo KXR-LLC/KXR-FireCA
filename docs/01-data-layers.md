@@ -170,6 +170,7 @@ The example below is normative for field names, types, and units.
 | `wind[]` | Background wind at 6.1 m above flat ground. `hour` is hours from Sim Clock zero. The Weather Model interpolates between entries. |
 | `moisture` | Initial fuel moisture values, in percent |
 | `ignitions[]` | Ignition circles. `hour` is hours from Sim Clock zero. `xM` and `zM` are world coordinates. |
+| `groundImageFile` | Optional. The file name of the Ground Image, a JPEG or PNG color image of the ground (`decisions.md`, decision D29). The example above has no Ground Image. |
 
 ### Validation
 
@@ -193,7 +194,7 @@ The Scenario loader must compute the layers below once, with compute shaders, af
 1. Compute Slope from Elevation with central differences. Use one-sided differences on the grid edge.
 2. Compute Normal from Slope.
 3. Compute Ground Height as the mean of Elevation over each 16 x 16 block.
-4. Compute Solid Mask: set a Wind Grid cell to 1 when the center of the cell is below Ground Height.
+4. Compute Solid Mask: set a Wind Grid cell to 1 when the center of the cell is below Ground Height. Also set each pit cell to 1 (`decisions.md`, decision D27).
 5. Keep one CPU copy of Elevation for mouse picking.
 
 ## Canyon Generator

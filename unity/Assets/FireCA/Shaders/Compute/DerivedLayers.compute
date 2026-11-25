@@ -66,12 +66,22 @@ void GroundHeightKernel(uint3 id : SV_DispatchThreadID)
     _GroundHeightOut[id.xy] = sum / (float)(_BlockSize * _BlockSize);
 }
 
+// The count of cells of a column that have the center below Ground Height. A column outside the Wind Grid has none.
+int SolidLevels(int2 column)
+{
+    if (column.x < 0 || column.y < 0 || column.x >= _WindGridSizeX || column.y >= _WindGridSizeZ) return 0;
+    return max(0, (int)ceil((_GroundHeightIn[column] - _WindBottomY) / _WindCellSize - 0.5));
+}
+
 // 1 when the center of the Wind Grid cell is below Ground Height, else 0.
+// A pit cell is also 1. A pit cell is an air cell with a solid cell on all four sides (docs/decisions.md, decision D27).
 [numthreads(4, 4, 4)]
 void SolidMaskKernel(uint3 id : SV_DispatchThreadID)
 {
     if ((int)id.x >= _WindGridSizeX || (int)id.y >= _WindGridSizeY || (int)id.z >= _WindGridSizeZ) return;
-    float centerY = _WindBottomY + ((float)id.y + 0.5) * _WindCellSize;
-    float ground = _GroundHeightIn[id.xz];
-    _SolidMaskOut[id] = centerY < ground ? 1.0 : 0.0;
+    int2 column = int2(id.xz);
+    int sides = min(min(SolidLevels(column - int2(1, 0)), SolidLevels(column + int2(1, 0))),
+                    min(SolidLevels(column - int2(0, 1)), SolidLevels(column + int2(0, 1))));
+    int levels = max(SolidLevels(column), sides);
+    _SolidMaskOut[id] = (int)id.y < levels ? 1.0 : 0.0;
 }

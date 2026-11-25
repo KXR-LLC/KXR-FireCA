@@ -24,7 +24,7 @@ Shader "FireCA/SmokePass"
     SamplerState fireca_linear_clamp_sampler;
     float4 _FireCA_WindGrid;        // cells on X, Y, Z, and the cell size (m)
     float _FireCA_WindBottomY;
-    float4 _FireCA_SmokeParams;     // x: density multiplier
+    float4 _FireCA_SmokeParams;     // x: density multiplier, y: darkness (0 to 1), z: billows (0 to 1)
     float4 _FireCA_SunDirection;    // unit vector toward the sun
     float4 _FireCA_SunColor;        // sun illuminance, lux, per color channel
     float4 _FireCA_SkyColor;        // ambient luminance on the smoke, nits
@@ -32,6 +32,37 @@ Shader "FireCA/SmokePass"
     float SampleSmoke(float3 local, float3 extent)
     {
         return _FireCA_Smoke.SampleLevel(fireca_linear_clamp_sampler, local / extent, 0);
+    }
+
+    float SmokeHash(float3 p)
+    {
+        p = frac(p * 0.1031);
+        p += dot(p, p.zyx + 31.32);
+        return frac((p.x + p.y) * p.z);
+    }
+
+    // Smooth noise from 0 to 1, with one cycle per unit of p.
+    float SmokeNoise(float3 p)
+    {
+        float3 i = floor(p);
+        float3 f = frac(p);
+        f = f * f * (3.0 - 2.0 * f);
+        float x00 = lerp(SmokeHash(i), SmokeHash(i + float3(1.0, 0.0, 0.0)), f.x);
+        float x10 = lerp(SmokeHash(i + float3(0.0, 1.0, 0.0)), SmokeHash(i + float3(1.0, 1.0, 0.0)), f.x);
+        float x01 = lerp(SmokeHash(i + float3(0.0, 0.0, 1.0)), SmokeHash(i + float3(1.0, 0.0, 1.0)), f.x);
+        float x11 = lerp(SmokeHash(i + float3(0.0, 1.0, 1.0)), SmokeHash(i + float3(1.0, 1.0, 1.0)), f.x);
+        return lerp(lerp(x00, x10, f.y), lerp(x01, x11, f.y), f.z);
+    }
+
+    // Billows (docs/decisions.md, decision D28): a noise field that rises with real time breaks the smoke of the
+    // 32 m Wind Grid into puffs. The factor has a mean near 1, so the amount of smoke stays about the same.
+    float Billows(float3 p, float amount)
+    {
+        if (amount <= 0.0)
+            return 1.0;
+        float3 q = p - float3(0.0, 9.0 * _Time.y, 0.0);
+        float n = 0.65 * SmokeNoise(q / 110.0) + 0.35 * SmokeNoise(q / 41.0 + 17.0);
+        return lerp(1.0, saturate(n * 3.4 - 1.05) * 1.55, amount);
     }
 
     float4 FullScreenPass(Varyings varyings) : SV_Target
@@ -67,6 +98,9 @@ Shader "FireCA/SmokePass"
         float density = max(_FireCA_SmokeParams.x, 0.0) * SMOKE_EXTINCTION;
         float3 sun = normalize(_FireCA_SunDirection.xyz);
         float exposure = GetCurrentExposureMultiplier();
+        // Darkness lowers the share of the light that the smoke scatters. The rest is absorbed, as in soot.
+        float albedo = lerp(1.0, 0.06, saturate(_FireCA_SmokeParams.y));
+        float billows = saturate(_FireCA_SmokeParams.z);
 
         float transmittance = 1.0;
         float3 radiance = float3(0.0, 0.0, 0.0);
@@ -76,6 +110,9 @@ Shader "FireCA/SmokePass"
             float3 p = origin + direction * t;
             // 3. Trilinear sample of the Smoke texture.
             float smoke = SampleSmoke(p, extent);
+            if (smoke <= 1.0e-4)
+                continue;
+            smoke *= Billows(p, billows);
             if (smoke <= 1.0e-4)
                 continue;
 
@@ -90,7 +127,7 @@ Shader "FireCA/SmokePass"
                 lightStep *= 1.5;
             }
             float lightTransmittance = exp(-lightDepth * density);
-            float3 scattered = _FireCA_SunColor.rgb * lightTransmittance * (0.9 / (4.0 * PI)) + _FireCA_SkyColor.rgb;
+            float3 scattered = (_FireCA_SunColor.rgb * lightTransmittance * (0.9 / (4.0 * PI)) + _FireCA_SkyColor.rgb) * albedo;
 
             // 6. Orange glow near a ground cell with a Heat Flux Coarse above 50 kW/m2.
             float2 uv = p.xz / extent.xz;

@@ -12,6 +12,8 @@ namespace FireCA
         public float cellSizeM;
         public string elevationFile = "elevation.r32";
         public string fuelFile = "fuel.png";
+        /// <summary>Optional. The Ground Image: a JPEG or PNG color image of the ground. See docs/decisions.md, decision D29.</summary>
+        public string groundImageFile = "";
         public float latitudeDeg;
         public int dayOfYear;
         public float startSolarHour;

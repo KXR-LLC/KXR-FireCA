@@ -66,6 +66,11 @@ namespace FireCA
         public bool SmokeVisible { get; set; } = true;
         /// <summary>Multiplier on the smoke density in the Smoke Pass.</summary>
         public float SmokeDensity { get; set; } = 1f;
+        public const float MaxSmokeDensity = 16f;
+        /// <summary>The share of the light that the smoke absorbs, from 0 (white smoke) to 1 (black smoke).</summary>
+        public float SmokeDarkness { get; set; } = 0.3f;
+        /// <summary>The strength of the billows in the Smoke Pass, from 0 to 1.</summary>
+        public float SmokeBillows { get; set; } = 0.5f;
         /// <summary>The fire coupling gain that the Control Panel sets, from 0 to 2. The value applies to each loaded Scenario.</summary>
         public float CouplingGain
         {
@@ -229,6 +234,7 @@ namespace FireCA
             Scenario = files;
             Terrain.Build(files, terrainMaterial, transform);
             Overlays.Bind(Registry);
+            Overlays.SetGroundImage(LoadGroundImage(files));
             Overlays.BindFire(Registry, 0f, Spread.SourceHoldS);
             Overlays.BindWeather(Registry, Weather);
             Overlays.BindWind(Registry);
@@ -240,6 +246,27 @@ namespace FireCA
             Debug.Log($"[FireCA] Loaded Scenario '{files.Id}' ({files.Grid.FireCells} cells per side) in {LastLoadSeconds:F2} s.");
             ScenarioChanged?.Invoke();
             return true;
+        }
+
+        /// <summary>
+        /// Reads the Ground Image of a Scenario. Returns null when the Scenario has none or the file is not an image.
+        /// The top row of the image is the north edge. Unity puts the bottom row of an image at v = 0, the south edge.
+        /// </summary>
+        static Texture2D LoadGroundImage(ScenarioFiles files)
+        {
+            if (string.IsNullOrEmpty(files.GroundImagePath)) return null;
+            var image = new Texture2D(2, 2, TextureFormat.RGB24, true, false)
+            {
+                name = "Ground Image", wrapMode = TextureWrapMode.Clamp, filterMode = FilterMode.Trilinear, anisoLevel = 8,
+                hideFlags = HideFlags.HideAndDontSave,
+            };
+            if (!image.LoadImage(System.IO.File.ReadAllBytes(files.GroundImagePath), true))
+            {
+                Debug.LogWarning($"[FireCA] The Ground Image '{files.Data.groundImageFile}' is not a JPEG or PNG image.");
+                Destroy(image);
+                return null;
+            }
+            return image;
         }
 
         /// <summary>The ground elevation at a world position, from the CPU copy of Elevation. Bilinear.</summary>

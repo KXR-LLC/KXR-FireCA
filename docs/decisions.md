@@ -308,3 +308,56 @@
 - The GDAL reader has not run, because the machine has no GDAL. A person with GDAL should run the script once with `--reader gdal`.
 - The simulated fire burns 9 hectares in 5 hours. The 1994 fire burned 890 hectares. The data notes give the cause: the LANDFIRE fuels describe the vegetation of 2025, after two fires. The ignition point lies in fuel 8 (closed timber litter), which spreads at under 2 chains per hour. The Scenario shows that the systems run on real data. The Scenario does not reproduce the 1994 fire. A fuel layer for 1994 needs a repaint of `fuel.png` from the report in `data/south-canyon/reference/`.
 - The camera presets of `south-canyon` come from the fallback of decision D3, because the Scenario has no `cameraPresets` entry.
+
+## D27: Pit cells in the Solid Mask
+
+**Question.** On `south-canyon`, the Wind Particles showed about 20 thin vertical streams at fixed places on the terrain, with no fire under them. A probe of the Wind Grid found columns one cell wide with a vertical velocity of 20 m/s to 70 m/s and a `theta` near 100 K. Each column stood on a pit cell: an air cell with a solid cell on all four sides. What is the cause, and what does the Scenario loader do about a pit cell?
+
+**Answer.** The Scenario loader sets each pit cell of the Solid Mask to 1. The solid height of a column is the larger of two values: the count of cells with the center below Ground Height, and the lowest such count of the four columns beside the column. A column outside the Wind Grid counts as open air. The Ground Height texture does not change.
+
+**Reason.** A pit cell has one open face, the top face. An incompressible flow cannot pass through a cell with one open face, so the velocity of a pit cell stays 0. The ground heat source adds heat to the pit cell on every Wind step, and no flow carries the heat away. With the sun alone, a pit cell gains about 0.015 K per Wind step and reaches 100 K in one afternoon. The advect kernel of the cells above reads `theta` from the pit cell and never lowers the value in the pit cell, so the pit cell feeds a hot jet without end. The fault is in the grid, not in a tunable. A pit that is one cell wide is smaller than the Wind Grid can resolve. One pass over the columns removes every pit cell, because a filled column never rises above the lowest column beside it.
+
+**Results.** `south-canyon` has no pit cell after the change. In one simulated hour of sun with no fire, the highest `theta` stays near 8 K and does not grow. Before the change the same run failed the test. At 16:48 solar time with the Scenario weather, the largest vertical velocity away from the fire is 13 m/s, in air with a `theta` of 0 that the wind lifts over a ridge. `synthetic-canyon-01` and `test-canyon-512` pass every M3 and M4 test with the change.
+
+**Open point.** A cell with three solid sides still has a weak flow and collects some heat (near 10 K in the test). The plume of a real fire still rises as a narrow column. Decision D24 describes that limit.
+
+## D28: Fuel color smoothing, particle size, and smoke look
+
+**Question.** On `south-canyon`, the fuel color layer shows the 30 m source cells of the LANDFIRE raster as squares. The Wind Particles have one width of 1 pixel. The smoke has one look: thin and white. `04-visualization.md` defines none of the controls that change these. What does the Control Panel add?
+
+**Answer.** The Display section has five more controls. Each control changes the picture only. No control changes a simulation texture.
+
+| Control | Range | Default | Effect |
+|---|---|---|---|
+| Fuel color smoothing (m) | 0 to 60 | 24 | The fuel color of a pixel is the weighted mean fuel color of 25 Fire Grid cells around the pixel, on a 5 x 5 pattern with a spacing of half the value. A noise field moves the pattern by up to 1.2 times the value, so a straight edge between two fuels becomes an irregular edge. The value 0 shows the fuel color of each cell. |
+| Particle size (m) | 0 to 40 | 0 | The width of one Wind Particle streak. At 0, a streak is 1 pixel wide. A wide streak has soft sides and a round head, and is at least 1.5 times as long as wide. |
+| Smoke density | 0 to 16 | 1 | Multiplier on the extinction of the smoke. The range was 0 to 4. |
+| Smoke darkness | 0 to 1 | 0.3 | The share of the light that the smoke absorbs. At 0 the smoke is white. At 1 the smoke scatters 6 percent of the light. |
+| Smoke billows | 0 to 1 | 0.5 | The strength of a noise field that breaks the smoke into puffs. The noise field rises at 9 m/s of real time. |
+
+**Reason.** The Fuel texture stays as the Scenario gives it, because the Spread Solver reads the Fuel texture. The smoothing is in the terrain shader, in the fuel color layer only. The Fuel model Overlay, the burn scar, and the fire glow still read the cell, so the Fuel model Overlay shows the exact data. The smoke is a passive tracer, so a multiplier in the Smoke Pass gives the same picture as a larger `smokeRate`. Each Wind Particle is now one quad of two triangles in place of one line, because a line has no width.
+
+**Open point.** `data/south-canyon/imagery/` holds an aerial image with one pixel per Fire Grid cell. A Scenario could carry such an image as a ground color layer. The Scenario format has no entry for one yet.
+
+## D29: The Ground Image
+
+**Question.** The fuel color layer shows one color per fuel code. For a real site, an aerial image shows the ground as it is. `data/south-canyon/imagery/` holds an aerial image with one pixel per Fire Grid cell. `01-data-layers.md` has no entry for a color image of the ground. How does a Scenario carry one?
+
+**Answer.**
+
+1. A new term: the Ground Image is an optional color image of the ground of a Scenario.
+2. `scenario.json` has one more optional field, `groundImageFile`. The value is the name of a JPEG or PNG file in the Scenario folder. A Scenario with no such field, or with an empty value, has no Ground Image.
+3. The Ground Image must cover exactly the Fire Grid, and the top row of the image must be the north edge, as in `fuel.png`. The image can have any size. The image should have `gridSize` pixels per side.
+4. When `groundImageFile` names a file that is not in the folder, the Scenario loader stops the load with the `ScenarioFiles` check. When the file is not a JPEG or PNG image, the app logs a warning and loads the Scenario with no Ground Image.
+5. The terrain shader draws the Ground Image in place of the fuel color. The Overlay, the burn scar, and the fire glow lie on top, as before. The Control Panel has a Ground Image opacity slider from 0 to 1, with a default of 1. At 0, the terrain shows the fuel color.
+6. The app owns the Ground Image texture. The texture registry does not hold the Ground Image, because no simulation step reads it, and the Texture memory readout does not count it. A 4096 x 4096 image uses 64 MB with the mip levels.
+7. `tools/import_canyon.py` has a `--ground-image` option. The script copies the file to the Scenario folder as `ground.jpg` or `ground.png` and writes the field. The script does not resample or georeference the image.
+
+**Reason.** The Ground Image changes the picture only. The Spread Solver reads the Fuel texture and no color, so the fire is the same with and without the Ground Image.
+
+**Results.** `south-canyon` now has the 2 m NAIP aerial image as the Ground Image. The Scenario loads in 0.41 s. The drainages of the image lie in the gullies of the Terrain Mesh, and the river lies on the valley floor, so the image has the right place and the right north. `elevation.r32` and `fuel.png` are identical to the files before.
+
+**Open points.**
+
+- The aerial image shows the vegetation of the image date, not of July 1994. The image also holds the sun shadows of the flight, which do not move with the Sim Clock.
+- The image has not been checked against a surveyed point. The check is by eye.

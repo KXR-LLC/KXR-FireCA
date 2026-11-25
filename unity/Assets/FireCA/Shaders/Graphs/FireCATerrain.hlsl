@@ -38,11 +38,14 @@ Texture2D<float> _FireCA_Insolation;
 Texture2D<float4> _FireCA_SurfaceWind;
 Texture2D<float4> _FireCA_ColorMap;
 Texture2D<float4> _FireCA_FuelPalette;
+Texture2D<float4> _FireCA_GroundImage;
 SamplerState fireca_linear_clamp_sampler;
+SamplerState fireca_trilinear_clamp_sampler;
 
 float4 _FireCA_GridParams;      // x: Fire Grid cells per side, y: cell size (m), z: 1 / extent (1/m)
 float4 _FireCA_OverlayParams;   // x: Overlay identifier, y: Overlay opacity
-float4 _FireCA_FireParams;      // x: Sim Clock (s), y: sourceHoldS (s), z: emberFadeS (s)
+float4 _FireCA_TerrainParams;   // x: fuel color smoothing (m), y: Ground Image opacity (0 when the Scenario has none)
+float4 _FireCA_FireParams;     // x: Sim Clock (s), y: sourceHoldS (s), z: emberFadeS (s)
 float4 _FireCA_WeatherA;        // startSolarHour, weather time (s), tempMaxC, tempMinC
 float4 _FireCA_WeatherB;        // rhMinPct, lapseRateCPerKm, referenceElevationM, unused
 
@@ -51,6 +54,17 @@ float FireCA_Hash(float2 p)
     float3 p3 = frac(float3(p.xyx) * 0.1031);
     p3 += dot(p3, p3.yzx + 33.33);
     return frac((p3.x + p3.y) * p3.z);
+}
+
+// Smooth noise from 0 to 1, with one cycle per unit of p.
+float FireCA_ValueNoise(float2 p)
+{
+    float2 i = floor(p);
+    float2 f = frac(p);
+    f = f * f * (3.0 - 2.0 * f);
+    float a = FireCA_Hash(i), b = FireCA_Hash(i + float2(1.0, 0.0));
+    float c = FireCA_Hash(i + float2(0.0, 1.0)), d = FireCA_Hash(i + float2(1.0, 1.0));
+    return lerp(lerp(a, b, f.x), lerp(c, d, f.x), f.y);
 }
 
 float3 FireCA_ColorMap(float t)
@@ -102,9 +116,44 @@ void FireCATerrain_float(float3 PositionWS, out float3 BaseColor, out float3 Nor
     // Layer 1: fuel color, with a small noise variation.
     uint fuel = FireCA_LoadFuelCode(_FireCA_Fuel, cell);
     float3 color = _FireCA_FuelPalette.Load(int3(fuel, 0, 0)).rgb;
+    // Fuel color smoothing (docs/decisions.md, decision D28): the mean fuel color of 25 cells around a position
+    // that a noise field moves. The smoothing changes the fuel color layer only. Every other layer reads the cell.
+    float smoothM = _FireCA_TerrainParams.x;
+    if (smoothM > 0.5)
+    {
+        float2 warp = float2(FireCA_ValueNoise(PositionWS.xz / 90.0), FireCA_ValueNoise(PositionWS.xz / 90.0 + 37.7)) - 0.5;
+        warp += 0.5 * (float2(FireCA_ValueNoise(PositionWS.xz / 31.0 + 11.3), FireCA_ValueNoise(PositionWS.xz / 31.0 + 71.9)) - 0.5);
+        float2 center = cellF + warp * 1.6 * smoothM / _FireCA_GridParams.y;
+        float spacing = 0.5 * smoothM / _FireCA_GridParams.y;
+        const float weights[5] = { 1.0, 4.0, 6.0, 4.0, 1.0 };
+        float3 sum = float3(0.0, 0.0, 0.0);
+        for (int tj = 0; tj < 5; tj++)
+        {
+            for (int ti = 0; ti < 5; ti++)
+            {
+                int2 tap = clamp(int2(floor(center + float2(ti - 2, tj - 2) * spacing)), 0, cells - 1);
+                uint tapFuel = FireCA_LoadFuelCode(_FireCA_Fuel, tap);
+                sum += weights[ti] * weights[tj] * _FireCA_FuelPalette.Load(int3(tapFuel, 0, 0)).rgb;
+            }
+        }
+        color = sum / 256.0;
+    }
     float fine = FireCA_Hash(float2(cell));
     float coarse = FireCA_Hash(float2(cell >> 3));
     color *= 0.90 + 0.12 * fine + 0.08 * coarse;
+    // The Ground Image replaces the fuel color (docs/decisions.md, decision D29). The mip level comes from the
+    // screen-space size of a texel, so the image does not shimmer far away.
+    float imageOpacity = saturate(_FireCA_TerrainParams.y);
+    if (imageOpacity > 0.0)
+    {
+        float imageWidth, imageHeight;
+        _FireCA_GroundImage.GetDimensions(imageWidth, imageHeight);
+        float2 texel = uv * float2(imageWidth, imageHeight);
+        float2 dx = ddx(texel), dy = ddy(texel);
+        float lod = 0.5 * log2(max(max(dot(dx, dx), dot(dy, dy)), 1.0e-8));
+        float3 image = _FireCA_GroundImage.SampleLevel(fireca_trilinear_clamp_sampler, uv, max(lod, 0.0)).rgb;
+        color = lerp(color, image, imageOpacity);
+    }
 
     // Layer 2: Overlay.
     int overlay = (int)round(_FireCA_OverlayParams.x);
