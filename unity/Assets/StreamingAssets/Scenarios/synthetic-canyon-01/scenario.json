@@ -1,0 +1,110 @@
+{
+    "name": "synthetic-canyon-01",
+    "gridSize": 4096,
+    "cellSizeM": 2.0,
+    "elevationFile": "elevation.r32",
+    "fuelFile": "fuel.png",
+    "latitudeDeg": 37.0,
+    "dayOfYear": 213,
+    "startSolarHour": 13.0,
+    "weather": {
+        "tempMaxC": 35.0,
+        "tempMinC": 16.0,
+        "rhMinPct": 12.0,
+        "referenceElevationM": 1200.0,
+        "lapseRateCPerKm": 6.5,
+        "stabilityKPerM": 0.003000000026077032,
+        "wind": [
+            {
+                "hour": 0.0,
+                "speedMps": 4.0,
+                "fromDeg": 225.0
+            },
+            {
+                "hour": 3.0,
+                "speedMps": 7.0,
+                "fromDeg": 250.0
+            }
+        ]
+    },
+    "moisture": {
+        "m1Pct": 5.0,
+        "m10Pct": 6.0,
+        "m100Pct": 8.0,
+        "livePct": 80.0
+    },
+    "ignitions": [
+        {
+            "hour": 0.0,
+            "xM": 3765.0,
+            "zM": 3908.0,
+            "radiusM": 6.0
+        }
+    ],
+    "cameraPresets": [
+        {
+            "name": "Overview",
+            "positionM": {
+                "x": 8355.7998046875,
+                "y": 5200.0,
+                "z": -1802.199951171875
+            },
+            "lookAtM": {
+                "x": 4096.0,
+                "y": 1415.0,
+                "z": 4096.0
+            }
+        },
+        {
+            "name": "Canyon Mouth",
+            "positionM": {
+                "x": 4235.89990234375,
+                "y": 1625.9000244140625,
+                "z": 2408.0
+            },
+            "lookAtM": {
+                "x": 3765.0,
+                "y": 1184.9000244140625,
+                "z": 4158.0
+            }
+        },
+        {
+            "name": "Chute",
+            "positionM": {
+                "x": 3071.0,
+                "y": 1804.9000244140625,
+                "z": 3800.0
+            },
+            "lookAtM": {
+                "x": 4241.0,
+                "y": 1464.9000244140625,
+                "z": 4100.0
+            }
+        },
+        {
+            "name": "Top Down",
+            "positionM": {
+                "x": 4096.0,
+                "y": 9436.599609375,
+                "z": 4096.0
+            },
+            "lookAtM": {
+                "x": 4096.0,
+                "y": 1165.0,
+                "z": 4096.0
+            }
+        }
+    ],
+    "landmarks": [
+        {
+            "name": "chuteBase",
+            "xM": 3821.0,
+            "zM": 4100.0
+        },
+        {
+            "name": "chuteTop",
+            "xM": 4671.0,
+            "zM": 4100.0
+        }
+    ]
+}

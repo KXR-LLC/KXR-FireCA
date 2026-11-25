@@ -1,0 +1,340 @@
+// The Spread Solver. See docs/02-fire-spread.md.
+// Every grid size comes from a uniform. One thread group of the cell kernels covers one block of the Active Mask.
+
+#pragma kernel BehaviorKernel
+#pragma kernel ArrivalKernel
+#pragma kernel HeatFluxKernel
+#pragma kernel HeatFluxCoarseKernel
+#pragma kernel BlockStatsKernel
+#pragma kernel ActiveMaskKernel
+#pragma kernel ReduceKernel
+#pragma kernel IgniteKernel
+#pragma kernel ClearKernel
+#pragma kernel CountNonFiniteKernel
+
+#include "FireCACommon.hlsl"
+#include "Rothermel.hlsl"
+
+// The cell kernels use 16 x 16 threads, so one thread group is one block. The C# code checks that _BlockSize is 16.
+#define FIRECA_GROUP 16
+
+int _FireGridSize;          // Fire Grid cells per side
+float _FireCellSize;        // m
+int _BlockSize;             // Fire Grid cells per block, on X and on Z
+int _FootprintSizeX;        // blocks on X
+int _FootprintSizeZ;        // blocks on Z
+
+float _Now;                 // fire time at the start of the Fire step, s
+float _Dt;                  // Fire step, s
+float _SourceHoldS;         // a cell that ignited longer ago does not ignite a neighbor
+float _MaskHoldS;           // a cell that ignited longer ago does not keep a block active
+float _SmolderFraction;
+float _SmolderDecayS;
+float _M10;                 // fuel moisture fractions from the Weather Model
+float _M100;
+float _MLive;
+int _FullGrid;              // 1: ignore the Active Mask
+
+float4 _IgniteCircle;       // x, z (world m), radius (m), ignition time (s)
+int2 _IgniteOrigin;         // first cell of the dispatched region
+int2 _CheckSize;            // size of the texture of the non-finite check
+
+StructuredBuffer<FuelConstants> _FuelTable;
+
+Texture2D<float> _Fuel;
+Texture2D<float> _Elevation;
+Texture2D<float2> _Slope;
+Texture2D<float> _Moisture1h;
+Texture2D<float2> _SurfaceWind;
+Texture2D<float4> _SpreadARead;
+Texture2D<float4> _SpreadBRead;
+Texture2D<float> _ArrivalRead;
+Texture2D<float> _ActiveMaskRead;
+Texture2D<float4> _BlockStatsRead;
+Texture2D<float4> _CheckTexture;
+Texture2D<float> _HeatFluxRead;
+SamplerState fireca_linear_clamp_sampler;
+
+RWTexture2D<float4> _SpreadAOut;
+RWTexture2D<float4> _SpreadBOut;
+RWTexture2D<float> _ArrivalOut;
+RWTexture2D<float> _ArrivalOutB;
+RWTexture2D<float> _HeatFluxOut;
+RWTexture2D<float> _ActiveMaskOut;
+RWTexture2D<float> _HeatFluxCoarseOut;
+RWTexture2D<float4> _BlockStats;
+RWStructuredBuffer<float4> _ReduceOut;      // one entry per footprint row
+RWStructuredBuffer<uint> _NonFiniteCount;
+
+bool BlockIsActive(uint3 groupId)
+{
+    return _FullGrid != 0 || _ActiveMaskRead[groupId.xy] > 0.5;
+}
+
+// ---- behavior pass: writes Spread A and Spread B ----
+
+[numthreads(FIRECA_GROUP, FIRECA_GROUP, 1)]
+void BehaviorKernel(uint3 id : SV_DispatchThreadID, uint3 groupId : SV_GroupID)
+{
+    if (!BlockIsActive(groupId))
+        return;
+    int2 c = int2(id.xy);
+    FuelConstants k = _FuelTable[FireCA_LoadFuelCode(_Fuel, c)];
+
+    float extent = _FireGridSize * _FireCellSize;
+    float2 uv = (float2(c) + 0.5) * _FireCellSize / extent;
+    float2 wind = _SurfaceWind.SampleLevel(fireca_linear_clamp_sampler, uv, 0);
+
+    float4 a, b;
+    FireCA_Behavior(k, _Moisture1h[c], _M10, _M100, _MLive, _Slope[c], wind, a, b);
+    _SpreadAOut[c] = a;
+    _SpreadBOut[c] = b;
+}
+
+// ---- arrival pass: moves the fire by travel time over 24 neighbors ----
+
+bool Burnable(int2 cell)
+{
+    return FireCA_IsBurnable(FireCA_LoadFuelCode(_Fuel, cell));
+}
+
+// False when a cell between the source (c + o) and the destination (c) is not burnable.
+bool PathIsBurnable(int2 c, int2 o)
+{
+    int2 ao = abs(o);
+    int2 s = sign(o);
+    if (max(ao.x, ao.y) < 2)
+        return true;
+    if (ao.x == 2 && ao.y == 0) return Burnable(c + int2(s.x, 0));
+    if (ao.x == 0 && ao.y == 2) return Burnable(c + int2(0, s.y));
+    if (ao.x == 2 && ao.y == 2) return Burnable(c + s);
+    if (ao.x == 2) return Burnable(c + int2(s.x, 0)) && Burnable(c + s);     // (2, 1)
+    return Burnable(c + int2(0, s.y)) && Burnable(c + s);                     // (1, 2)
+}
+
+[numthreads(FIRECA_GROUP, FIRECA_GROUP, 1)]
+void ArrivalKernel(uint3 id : SV_DispatchThreadID, uint3 groupId : SV_GroupID)
+{
+    // The read copy and the write copy of a block that is not active hold the same values.
+    if (!BlockIsActive(groupId))
+        return;
+    int2 c = int2(id.xy);
+    float current = _ArrivalRead[c];
+    if (current < 1.0e29)
+    {
+        _ArrivalOut[c] = current;
+        return;
+    }
+    float4 a = _SpreadARead[c];
+    if (!Burnable(c) || a.x <= 0.0)
+    {
+        _ArrivalOut[c] = FIRECA_NOT_IGNITED;
+        return;
+    }
+
+    float hc = _Elevation[c];
+    float best = FIRECA_NOT_IGNITED;
+    for (int oy = -2; oy <= 2; oy++)
+    {
+        for (int ox = -2; ox <= 2; ox++)
+        {
+            if (ox == 0 && oy == 0)
+                continue;
+            int2 o = int2(ox, oy);
+            int2 n = c + o;
+            if (n.x < 0 || n.y < 0 || n.x >= _FireGridSize || n.y >= _FireGridSize)
+                continue;
+            float tn = _ArrivalRead[n];
+            if (tn >= 1.0e29)
+                continue;
+            if (_Now - tn > _SourceHoldS)
+                continue;
+            if (!PathIsBurnable(c, o))
+                continue;
+
+            float flat = length(float2(o)) * _FireCellSize;
+            float2 d = -float2(o) / length(float2(o));          // from the source toward the cell
+            float dh = hc - _Elevation[n];
+            float dist = sqrt(flat * flat + dh * dh);
+            float rn = FireCA_RateAt(_SpreadARead[n], d);
+            float rc = FireCA_RateAt(a, d);
+            if (rn <= 0.0 || rc <= 0.0)
+                continue;
+            float r = 2.0 * rn * rc / (rn + rc);
+            best = min(best, tn + dist / r);
+        }
+    }
+    _ArrivalOut[c] = best <= _Now + _Dt ? max(best, _Now) : FIRECA_NOT_IGNITED;
+}
+
+// ---- heat flux pass: the heat release of each cell, averaged over the Fire step ----
+
+[numthreads(FIRECA_GROUP, FIRECA_GROUP, 1)]
+void HeatFluxKernel(uint3 id : SV_DispatchThreadID, uint3 groupId : SV_GroupID)
+{
+    if (!BlockIsActive(groupId))
+        return;
+    int2 c = int2(id.xy);
+    float arrival = _ArrivalRead[c];
+    float flux = 0.0;
+    float end = _Now + _Dt;
+    float age = end - arrival;
+    // A cell that is burned out releases no heat (docs/decisions.md, decision D10).
+    if (arrival < 1.0e29 && age >= 0.0 && age < _SourceHoldS)
+    {
+        float4 b = _SpreadBRead[c];
+        float tR = b.y;
+        float overlap = max(0.0, min(end, arrival + tR) - max(_Now, arrival)) / max(_Dt, 1.0e-6);
+        float smolder = age > tR ? _SmolderFraction * exp(-(age - tR) / _SmolderDecayS) : 0.0;
+        flux = b.x * (overlap + smolder);
+        if (flux < 1.0)
+            flux = 0.0;
+    }
+    _HeatFluxOut[c] = flux;
+}
+
+// Heat Flux Coarse: the mean of the Heat Flux over each block, kW/m2. One thread handles one block.
+// The Heat Flux of a block that is not active is 0.
+[numthreads(8, 8, 1)]
+void HeatFluxCoarseKernel(uint3 id : SV_DispatchThreadID)
+{
+    if ((int)id.x >= _FootprintSizeX || (int)id.y >= _FootprintSizeZ)
+        return;
+    if (_FullGrid == 0 && _ActiveMaskRead[id.xy] < 0.5)
+    {
+        _HeatFluxCoarseOut[id.xy] = 0.0;
+        return;
+    }
+    int2 origin = int2(id.xy) * _BlockSize;
+    float sum = 0.0;
+    for (int j = 0; j < _BlockSize; j++)
+    {
+        for (int i = 0; i < _BlockSize; i++)
+        {
+            sum += _HeatFluxRead[origin + int2(i, j)];
+        }
+    }
+    _HeatFluxCoarseOut[id.xy] = sum / (float)(_BlockSize * _BlockSize);
+}
+
+// ---- block statistics, Active Mask, and reduction ----
+
+// Block Stats: x = 1 when the block holds a cell that keeps the block active, y = the largest head rate of spread (m/s),
+// z = the count of ignited cells, w = the count of flaming cells. One thread handles one block.
+[numthreads(8, 8, 1)]
+void BlockStatsKernel(uint3 id : SV_DispatchThreadID)
+{
+    if ((int)id.x >= _FootprintSizeX || (int)id.y >= _FootprintSizeZ)
+        return;
+    // A block that is not active keeps its last statistics, so the ignited count of a burned-out block stays.
+    // The last statistics of the block have an active flag of 0 and a flaming count of 0.
+    if (_FullGrid == 0 && _ActiveMaskRead[id.xy] < 0.5)
+        return;
+    int2 origin = int2(id.xy) * _BlockSize;
+    float end = _Now + _Dt;
+    float active = 0.0, rMax = 0.0, ignited = 0.0, flaming = 0.0;
+    for (int j = 0; j < _BlockSize; j++)
+    {
+        for (int i = 0; i < _BlockSize; i++)
+        {
+            int2 c = origin + int2(i, j);
+            float arrival = _ArrivalRead[c];
+            float4 a = _SpreadARead[c];
+            rMax = max(rMax, a.x);
+            if (arrival < 1.0e29)
+            {
+                ignited += 1.0;
+                float age = end - arrival;
+                if (age < _MaskHoldS)
+                    active = 1.0;
+                if (age < _SpreadBRead[c].y)
+                    flaming += 1.0;
+            }
+        }
+    }
+    _BlockStats[id.xy] = float4(active, rMax, ignited, flaming);
+}
+
+// Active Mask: 1 when the block or one of the 8 blocks around the block holds an active cell.
+[numthreads(8, 8, 1)]
+void ActiveMaskKernel(uint3 id : SV_DispatchThreadID)
+{
+    if ((int)id.x >= _FootprintSizeX || (int)id.y >= _FootprintSizeZ)
+        return;
+    float active = 0.0;
+    for (int j = -1; j <= 1; j++)
+    {
+        for (int i = -1; i <= 1; i++)
+        {
+            int2 b = int2(id.xy) + int2(i, j);
+            if (b.x < 0 || b.y < 0 || b.x >= _FootprintSizeX || b.y >= _FootprintSizeZ)
+                continue;
+            active = max(active, _BlockStatsRead[b].x);
+        }
+    }
+    _ActiveMaskOut[id.xy] = active;
+}
+
+// One thread reduces one footprint row: x = active blocks, y = the largest head rate in the active blocks,
+// z = ignited cells, w = flaming cells.
+[numthreads(64, 1, 1)]
+void ReduceKernel(uint3 id : SV_DispatchThreadID)
+{
+    if ((int)id.x >= _FootprintSizeZ)
+        return;
+    float4 sum = float4(0.0, 0.0, 0.0, 0.0);
+    for (int i = 0; i < _FootprintSizeX; i++)
+    {
+        int2 b = int2(i, id.x);
+        float4 s = _BlockStatsRead[b];
+        if (_ActiveMaskRead[b] > 0.5)
+        {
+            sum.x += 1.0;
+            sum.y = max(sum.y, s.y);
+        }
+        sum.z += s.z;
+        sum.w += s.w;
+    }
+    _ReduceOut[id.x] = sum;
+}
+
+// ---- ignition and clear ----
+
+// Sets the Arrival Time of every burnable cell in the circle that is not ignited. Writes both copies.
+[numthreads(8, 8, 1)]
+void IgniteKernel(uint3 id : SV_DispatchThreadID)
+{
+    int2 c = _IgniteOrigin + int2(id.xy);
+    if (c.x < 0 || c.y < 0 || c.x >= _FireGridSize || c.y >= _FireGridSize)
+        return;
+    float2 center = (float2(c) + 0.5) * _FireCellSize;
+    if (distance(center, _IgniteCircle.xy) > _IgniteCircle.z)
+        return;
+    if (!Burnable(c))
+        return;
+    if (_ArrivalOut[c] < 1.0e29)
+        return;
+    _ArrivalOut[c] = _IgniteCircle.w;
+    _ArrivalOutB[c] = _IgniteCircle.w;
+}
+
+[numthreads(FIRECA_GROUP, FIRECA_GROUP, 1)]
+void ClearKernel(uint3 id : SV_DispatchThreadID)
+{
+    _ArrivalOut[id.xy] = FIRECA_NOT_IGNITED;
+    _ArrivalOutB[id.xy] = FIRECA_NOT_IGNITED;
+    _HeatFluxOut[id.xy] = 0.0;
+}
+
+// ---- test support: counts the values of a texture that are NaN or infinite ----
+
+[numthreads(8, 8, 1)]
+void CountNonFiniteKernel(uint3 id : SV_DispatchThreadID)
+{
+    if ((int)id.x >= _CheckSize.x || (int)id.y >= _CheckSize.y)
+        return;
+    uint4 bits = asuint(_CheckTexture[id.xy]);
+    bool4 bad = (bits & 0x7F800000u) == 0x7F800000u;
+    if (any(bad))
+        InterlockedAdd(_NonFiniteCount[0], 1u);
+}

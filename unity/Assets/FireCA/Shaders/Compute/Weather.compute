@@ -1,0 +1,138 @@
+// The Weather Model kernels. See docs/03-weather-wind.md.
+// Insolation: direct sunlight on every Fire Grid cell, with a shadow ray march over Elevation.
+// Moisture: the 1-hour dead fuel moisture of every Fire Grid cell.
+// The two fill kernels set a uniform Moisture 1h and a uniform Surface Wind. M3 moves the Surface Wind to the Wind Solver.
+
+#pragma kernel FillMoistureKernel
+#pragma kernel FillSurfaceWindKernel
+#pragma kernel InsolationKernel
+#pragma kernel MoistureKernel
+#pragma kernel SurfaceHeatingKernel
+
+#include "Weather.hlsl"
+
+int _FireGridSize;          // Fire Grid cells per side
+float _FireCellSize;        // m
+int _FootprintSizeX;        // Wind Grid columns on X
+int _FootprintSizeZ;        // Wind Grid columns on Z
+float _FillMoisture;        // fraction
+float2 _FillWind;           // m/s, X and Z, pointing where the wind goes
+
+float4 _WeatherA;           // startSolarHour, weather time (s), tempMaxC, tempMinC
+float4 _WeatherB;           // rhMinPct, lapseRateCPerKm, referenceElevationM, unused
+float3 _SunDirection;       // unit vector toward the sun, world axes
+float _MaxElevation;        // the highest elevation of the Scenario, m
+float _DtWeather;           // simulated seconds since the last moisture update
+float _MoistureMin;
+float _MoistureMax;
+float _MoistureWindFactor;  // midflame wind over the Surface Wind speed, for the moisture equations
+int _ShadowSteps;           // steps of the shadow ray march
+float _ShadowStepStart;     // first step length, m
+float _ShadowStepGrowth;    // growth of the step length per step
+
+Texture2D<float> _Elevation;
+Texture2D<float2> _Normal;
+Texture2D<float> _InsolationRead;
+Texture2D<float2> _SurfaceWind;
+SamplerState fireca_linear_clamp_sampler;
+
+RWTexture2D<float> _Moisture1hOut;
+RWTexture2D<float2> _SurfaceWindOut;
+RWTexture2D<float> _InsolationOut;
+RWTexture2D<float> _SurfaceHeatingOut;
+int _BlockSize;             // Fire Grid cells per Wind Grid column, on X and on Z
+
+[numthreads(8, 8, 1)]
+void FillMoistureKernel(uint3 id : SV_DispatchThreadID)
+{
+    if ((int)id.x >= _FireGridSize || (int)id.y >= _FireGridSize)
+        return;
+    _Moisture1hOut[id.xy] = _FillMoisture;
+}
+
+[numthreads(8, 8, 1)]
+void FillSurfaceWindKernel(uint3 id : SV_DispatchThreadID)
+{
+    if ((int)id.x >= _FootprintSizeX || (int)id.y >= _FootprintSizeZ)
+        return;
+    _SurfaceWindOut[id.xy] = _FillWind;
+}
+
+// Insolation = dni * max(0, dot(normal, sun)) * shadow.
+[numthreads(8, 8, 1)]
+void InsolationKernel(uint3 id : SV_DispatchThreadID)
+{
+    if ((int)id.x >= _FireGridSize || (int)id.y >= _FireGridSize)
+        return;
+    int2 c = int2(id.xy);
+    float dni = FireCA_DirectNormalIrradiance(_SunDirection.y);
+    float2 nxz = _Normal[c];
+    float3 normal = float3(nxz.x, sqrt(saturate(1.0 - dot(nxz, nxz))), nxz.y);
+    float facing = max(0.0, dot(normal, _SunDirection));
+    float result = 0.0;
+    if (dni > 0.0 && facing > 0.0)
+    {
+        float extent = _FireGridSize * _FireCellSize;
+        float3 origin = float3((c.x + 0.5) * _FireCellSize, _Elevation[c], (c.y + 0.5) * _FireCellSize);
+        float shadow = 1.0;
+        float t = 0.0;
+        float stepLength = _ShadowStepStart;
+        for (int k = 0; k < _ShadowSteps; k++)
+        {
+            t += stepLength;
+            stepLength *= _ShadowStepGrowth;
+            float3 p = origin + _SunDirection * t;
+            // No terrain is above the ray past the highest elevation or outside the Fire Grid.
+            if (p.y > _MaxElevation || p.x < 0.0 || p.z < 0.0 || p.x > extent || p.z > extent)
+                break;
+            float ground = _Elevation.SampleLevel(fireca_linear_clamp_sampler, p.xz / extent, 0);
+            if (ground > p.y)
+            {
+                shadow = 0.0;
+                break;
+            }
+        }
+        result = dni * facing * shadow;
+    }
+    _InsolationOut[c] = result;
+}
+
+// m1 = m1 + (emc - m1) * (1 - exp(-dtWeather / 3600)), clamped to the range 0.01 to 0.35.
+[numthreads(8, 8, 1)]
+void MoistureKernel(uint3 id : SV_DispatchThreadID)
+{
+    if ((int)id.x >= _FireGridSize || (int)id.y >= _FireGridSize)
+        return;
+    int2 c = int2(id.xy);
+    float elevation = _Elevation[c];
+    float airTempC = FireCA_CellAirTempC(_WeatherA, _WeatherB, elevation);
+    float rhPct = FireCA_CellRelativeHumidityPct(_WeatherA, _WeatherB, elevation);
+
+    float extent = _FireGridSize * _FireCellSize;
+    float2 uv = (float2(c) + 0.5) * _FireCellSize / extent;
+    float midflame = _MoistureWindFactor * length(_SurfaceWind.SampleLevel(fireca_linear_clamp_sampler, uv, 0));
+
+    float emc = FireCA_FuelLevelEmc(airTempC, rhPct, _InsolationRead[c], midflame);
+    float m1 = _Moisture1hOut[c];
+    m1 += (emc - m1) * (1.0 - exp(-_DtWeather / 3600.0));
+    _Moisture1hOut[c] = clamp(m1, _MoistureMin, _MoistureMax);
+}
+
+// SurfaceHeating = 0.35 * mean(Insolation over the block) - 30, W/m2.
+// A sunlit slope gets a positive value. A shaded slope and every slope at night get -30 W/m2.
+[numthreads(8, 8, 1)]
+void SurfaceHeatingKernel(uint3 id : SV_DispatchThreadID)
+{
+    if ((int)id.x >= _FootprintSizeX || (int)id.y >= _FootprintSizeZ)
+        return;
+    int2 origin = int2(id.xy) * _BlockSize;
+    float sum = 0.0;
+    for (int j = 0; j < _BlockSize; j++)
+    {
+        for (int i = 0; i < _BlockSize; i++)
+        {
+            sum += _InsolationRead[origin + int2(i, j)];
+        }
+    }
+    _SurfaceHeatingOut[id.xy] = 0.35 * sum / (float)(_BlockSize * _BlockSize) - 30.0;
+}

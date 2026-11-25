@@ -1,0 +1,100 @@
+// Wind Particles: GPU particles that trace the wind field. See docs/04-visualization.md.
+// The particles move with the Velocity of the Wind Grid, multiplied by particleSpeedScale.
+// The motion uses real time, so the Sim Clock time scale does not change the particle speed.
+
+#pragma kernel UpdateKernel
+
+struct Particle
+{
+    float4 positionAge;     // world position (m), age (s)
+    float4 velocitySeed;    // wind velocity at the particle (m/s), 1 after the first spawn
+};
+
+int _ParticleCount;
+float _DeltaTime;           // real seconds
+float _SpeedScale;          // particleSpeedScale
+float _LifeS;               // a particle is removed after this many seconds
+float _MinHeightM;          // spawn height above the ground
+float _MaxHeightM;
+uint _Seed;
+
+int _WindGridSizeX;
+int _WindGridSizeY;
+int _WindGridSizeZ;
+float _WindCellSize;
+float _WindBottomY;
+
+Texture3D<float4> _VelocityRead;
+Texture3D<float> _SolidMask;
+Texture2D<float> _GroundHeight;
+SamplerState fireca_linear_clamp_sampler;
+
+RWStructuredBuffer<Particle> _Particles;
+
+float3 GridExtent() { return float3(_WindGridSizeX, _WindGridSizeY, _WindGridSizeZ) * _WindCellSize; }
+
+// The Wind Grid is staggered. See Wind.compute.
+float3 SampleVelocity(float3 p)
+{
+    float3 e = GridExtent();
+    float h = 0.5 * _WindCellSize;
+    return float3(
+        _VelocityRead.SampleLevel(fireca_linear_clamp_sampler, (p + float3(h, 0.0, 0.0)) / e, 0).x,
+        _VelocityRead.SampleLevel(fireca_linear_clamp_sampler, (p + float3(0.0, h, 0.0)) / e, 0).y,
+        _VelocityRead.SampleLevel(fireca_linear_clamp_sampler, (p + float3(0.0, 0.0, h)) / e, 0).z);
+}
+
+uint Hash(uint x)
+{
+    x ^= x >> 16; x *= 0x7feb352du;
+    x ^= x >> 15; x *= 0x846ca68bu;
+    x ^= x >> 16;
+    return x;
+}
+
+float Random(inout uint state)
+{
+    state = Hash(state);
+    return (state & 0xFFFFFFu) / 16777216.0;
+}
+
+[numthreads(256, 1, 1)]
+void UpdateKernel(uint3 id : SV_DispatchThreadID)
+{
+    if ((int)id.x >= _ParticleCount) return;
+    Particle p = _Particles[id.x];
+    float3 extent = GridExtent();
+    float3 position = p.positionAge.xyz;
+    float age = p.positionAge.w + _DeltaTime;
+
+    // Position relative to the Wind Grid origin.
+    float3 local = position - float3(0.0, _WindBottomY, 0.0);
+    bool spawned = p.velocitySeed.w > 0.5;
+    bool outside = any(local < 0.0) || any(local > extent);
+    bool dead = !spawned || age > _LifeS || outside;
+    if (!dead)
+    {
+        int3 cell = clamp(int3(local / _WindCellSize), 0, int3(_WindGridSizeX, _WindGridSizeY, _WindGridSizeZ) - 1);
+        dead = _SolidMask[cell] > 0.5;
+    }
+
+    if (dead)
+    {
+        // Spawn at a random position over the Fire Grid area, with more particles near the ground.
+        uint state = Hash(id.x * 2654435761u + _Seed);
+        float x = Random(state) * extent.x, z = Random(state) * extent.z;
+        float r = Random(state);
+        float height = _MinHeightM + (_MaxHeightM - _MinHeightM) * r * r;
+        float ground = _GroundHeight.SampleLevel(fireca_linear_clamp_sampler, float2(x, z) / extent.xz, 0);
+        position = float3(x, ground + height, z);
+        // The first spawn spreads the ages, so the particles do not all end in the same frame.
+        age = spawned ? 0.0 : Random(state) * _LifeS;
+        local = position - float3(0.0, _WindBottomY, 0.0);
+    }
+
+    float3 velocity = SampleVelocity(local);
+    position += velocity * _SpeedScale * _DeltaTime;
+    p.positionAge = float4(position, age);
+    p.velocitySeed = float4(velocity, 1.0);
+    _Particles[id.x] = p;
+}

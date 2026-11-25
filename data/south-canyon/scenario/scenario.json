@@ -1,0 +1,59 @@
+{
+  "name": "south-canyon",
+  "gridSize": 4096,
+  "cellSizeM": 2.0,
+  "elevationFile": "elevation.r32",
+  "fuelFile": "fuel.png",
+  "latitudeDeg": 39.578,
+  "dayOfYear": 187,
+  "startSolarHour": 12.0,
+  "weather": {
+    "tempMaxC": 32.0,
+    "tempMinC": 15.0,
+    "rhMinPct": 8.0,
+    "referenceElevationM": 1731.0,
+    "lapseRateCPerKm": 6.5,
+    "stabilityKPerM": 0.003,
+    "wind": [
+      {
+        "hour": 0.0,
+        "speedMps": 5.0,
+        "fromDeg": 200.0
+      },
+      {
+        "hour": 1.3,
+        "speedMps": 8.0,
+        "fromDeg": 220.0
+      },
+      {
+        "hour": 2.2,
+        "speedMps": 11.0,
+        "fromDeg": 260.0
+      },
+      {
+        "hour": 2.8,
+        "speedMps": 13.0,
+        "fromDeg": 270.0
+      },
+      {
+        "hour": 6.8,
+        "speedMps": 6.0,
+        "fromDeg": 315.0
+      }
+    ]
+  },
+  "moisture": {
+    "m1Pct": 3.5,
+    "m10Pct": 5.0,
+    "m100Pct": 7.0,
+    "livePct": 100.0
+  },
+  "ignitions": [
+    {
+      "hour": 0.0,
+      "xM": 3288.0,
+      "zM": 3680.0,
+      "radiusM": 6.0
+    }
+  ]
+}

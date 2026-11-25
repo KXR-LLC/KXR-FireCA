@@ -1,0 +1,17 @@
+{
+    "name": "FireCA.Tests.PlayMode",
+    "rootNamespace": "FireCA.Tests",
+    "references": [
+        "FireCA.Runtime",
+        "UnityEngine.TestRunner",
+        "Unity.InputSystem",
+        "Unity.RenderPipelines.Core.Runtime",
+        "Unity.RenderPipelines.HighDefinition.Runtime"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "overrideReferences": true,
+    "precompiledReferences": [ "nunit.framework.dll" ],
+    "autoReferenced": false,
+    "defineConstraints": [ "UNITY_INCLUDE_TESTS" ]
+}

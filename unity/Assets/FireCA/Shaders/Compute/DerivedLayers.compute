@@ -1,0 +1,77 @@
+// Derived layers of the Scenario loader: Slope, Normal, Ground Height, Solid Mask.
+// See docs/01-data-layers.md, section "Derived layers".
+// Every grid size comes from a uniform.
+
+#pragma kernel SlopeKernel
+#pragma kernel NormalKernel
+#pragma kernel GroundHeightKernel
+#pragma kernel SolidMaskKernel
+
+int _FireGridSize;        // Fire Grid cells per side
+float _FireCellSize;      // m
+int _BlockSize;           // Fire Grid cells per Wind Grid column, on X and on Z
+int _WindGridSizeX;
+int _WindGridSizeY;
+int _WindGridSizeZ;
+float _WindCellSize;      // m
+float _WindBottomY;       // world Y of the bottom face of the Wind Grid, m
+
+Texture2D<float> _Elevation;
+Texture2D<float2> _SlopeIn;
+Texture2D<float> _GroundHeightIn;
+
+RWTexture2D<float2> _SlopeOut;
+RWTexture2D<float2> _NormalOut;
+RWTexture2D<float> _GroundHeightOut;
+RWTexture3D<float> _SolidMaskOut;
+
+// Elevation gradient (dh/dx, dh/dz). Central differences, one-sided on the grid edge.
+[numthreads(8, 8, 1)]
+void SlopeKernel(uint3 id : SV_DispatchThreadID)
+{
+    if ((int)id.x >= _FireGridSize || (int)id.y >= _FireGridSize) return;
+    int2 c = int2(id.xy);
+    int last = _FireGridSize - 1;
+    int x0 = max(c.x - 1, 0), x1 = min(c.x + 1, last);
+    int z0 = max(c.y - 1, 0), z1 = min(c.y + 1, last);
+    float dhdx = (_Elevation[int2(x1, c.y)] - _Elevation[int2(x0, c.y)]) / ((x1 - x0) * _FireCellSize);
+    float dhdz = (_Elevation[int2(c.x, z1)] - _Elevation[int2(c.x, z0)]) / ((z1 - z0) * _FireCellSize);
+    _SlopeOut[c] = float2(dhdx, dhdz);
+}
+
+// World normal X and Z. The reader rebuilds Y.
+[numthreads(8, 8, 1)]
+void NormalKernel(uint3 id : SV_DispatchThreadID)
+{
+    if ((int)id.x >= _FireGridSize || (int)id.y >= _FireGridSize) return;
+    float2 g = _SlopeIn[id.xy];
+    float3 n = normalize(float3(-g.x, 1.0, -g.y));
+    _NormalOut[id.xy] = n.xz;
+}
+
+// Mean elevation of the block of Fire Grid cells under each Wind Grid column.
+[numthreads(8, 8, 1)]
+void GroundHeightKernel(uint3 id : SV_DispatchThreadID)
+{
+    if ((int)id.x >= _WindGridSizeX || (int)id.y >= _WindGridSizeZ) return;
+    int2 origin = int2(id.xy) * _BlockSize;
+    float sum = 0.0;
+    for (int j = 0; j < _BlockSize; j++)
+    {
+        for (int i = 0; i < _BlockSize; i++)
+        {
+            sum += _Elevation[origin + int2(i, j)];
+        }
+    }
+    _GroundHeightOut[id.xy] = sum / (float)(_BlockSize * _BlockSize);
+}
+
+// 1 when the center of the Wind Grid cell is below Ground Height, else 0.
+[numthreads(4, 4, 4)]
+void SolidMaskKernel(uint3 id : SV_DispatchThreadID)
+{
+    if ((int)id.x >= _WindGridSizeX || (int)id.y >= _WindGridSizeY || (int)id.z >= _WindGridSizeZ) return;
+    float centerY = _WindBottomY + ((float)id.y + 0.5) * _WindCellSize;
+    float ground = _GroundHeightIn[id.xz];
+    _SolidMaskOut[id] = centerY < ground ? 1.0 : 0.0;
+}

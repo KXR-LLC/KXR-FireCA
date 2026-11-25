@@ -1,0 +1,46 @@
+# Unity generated folders
+/unity/[Ll]ibrary/
+/unity/[Tt]emp/
+/unity/[Oo]bj/
+/unity/[Bb]uild/
+/unity/[Bb]uilds/
+/unity/[Ll]ogs/
+/unity/[Uu]ser[Ss]ettings/
+/unity/[Mm]emoryCaptures/
+/unity/[Rr]ecordings/
+
+# IDE and solution files
+/unity/.vs/
+/unity/.vscode/
+/unity/.idea/
+/unity/*.csproj
+/unity/*.sln
+/unity/*.slnx
+/unity/*.suo
+/unity/*.user
+/unity/*.userprefs
+/unity/*.pidb
+/unity/*.booproj
+/unity/*.svd
+/unity/*.pdb
+/unity/*.mdb
+/unity/*.opendb
+/unity/*.VC.db
+
+# Python
+__pycache__/
+*.pyc
+
+# The full-size elevation raster is 64 MB. Tools > FireCA > Setup > Generate Default Scenarios writes the file again.
+/unity/Assets/StreamingAssets/Scenarios/synthetic-canyon-01/elevation.r32
+
+# The South Canyon elevation raster is 64 MB. tools/import_canyon.py writes the file again from data/south-canyon/source.
+/unity/Assets/StreamingAssets/Scenarios/south-canyon/elevation.r32
+
+# The real-world source data is about 300 MB. The rasters, the images, and the report PDFs stay out of git.
+# The README, the fetch scripts, the prepared scenario.json, and the perimeter files are in git.
+/data/**/*.tif
+/data/**/*.r32
+/data/**/*.png
+/data/**/*.jpg
+/data/**/*.pdf

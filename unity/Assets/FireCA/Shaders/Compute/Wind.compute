@@ -1,0 +1,417 @@
+// The Wind Solver: an incompressible fluid solver with buoyancy on the Wind Grid. See docs/03-weather-wind.md.
+//
+// The grid is staggered (docs/decisions.md, decision D19). One Velocity texel (i, j, k) holds:
+//   x: wind X on the west face of the cell,    at ((i) h, (j + 0.5) h, (k + 0.5) h)
+//   y: wind Y on the bottom face of the cell,  at ((i + 0.5) h, (j) h, (k + 0.5) h)
+//   z: wind Z on the south face of the cell,   at ((i + 0.5) h, (j + 0.5) h, (k) h)
+//   w: theta at the cell center, K above the background air at the same height
+// Positions are relative to the Wind Grid origin (0, _WindBottomY, 0). Every grid size comes from a uniform.
+
+#pragma kernel InitKernel
+#pragma kernel FlagsKernel
+#pragma kernel AdvectKernel
+#pragma kernel ForcesKernel
+#pragma kernel DivergenceKernel
+#pragma kernel PressureKernel
+#pragma kernel ProjectKernel
+#pragma kernel SurfaceWindKernel
+#pragma kernel StatsKernel
+#pragma kernel ClearSmokeKernel
+
+int _WindGridSizeX;
+int _WindGridSizeY;
+int _WindGridSizeZ;
+float _WindCellSize;        // m
+float _WindBottomY;         // world Y of the bottom face of the Wind Grid, m
+
+float _DtWind;              // s
+float _Gravity;             // m/s2
+float _Theta0;              // K
+float _RhoCp;               // J/m3/K
+float _Z0;                  // m
+float _ProfileCapM;         // m
+float _SpongeCells;
+float _SpongeTopCells;
+float _SpongeTimeS;
+float _DragCoef;
+float _HeatingGain;
+float _CouplingGain;
+float _FireConvFraction;
+float _ThetaMin;
+float _ThetaMax;
+float _SmokeRate;
+float _SmokeLifeS;
+float _SorOmega;
+float _SampleHeightM;
+float _StabilityKPerM;
+float2 _BackgroundWind;     // background wind at 6.1 m, m/s (X, Z), pointing where the wind goes
+int _Parity;                // 0: red cells, 1: black cells
+
+Texture3D<float4> _VelocityRead;
+Texture3D<float> _SmokeRead;
+Texture3D<float> _SolidMask;
+Texture3D<float> _FlagsRead;
+Texture3D<float> _DivergenceRead;
+Texture3D<float> _PressureRead;
+Texture2D<float> _GroundHeight;
+Texture2D<float> _SurfaceHeating;
+Texture2D<float> _HeatFluxCoarse;
+SamplerState fireca_linear_clamp_sampler;
+
+RWTexture3D<float4> _VelocityOut;
+RWTexture3D<float> _SmokeOut;
+RWTexture3D<float> _FlagsOut;
+RWTexture3D<float> _DivergenceOut;
+RWTexture3D<float> _Pressure;
+RWTexture2D<float2> _SurfaceWindOut;
+// Two entries per column. Entry 2n: max speed, non-finite count, sum of |divergence|, air cells.
+// Entry 2n + 1: lowest theta, highest theta, highest smoke density, sum of the smoke density.
+RWStructuredBuffer<float4> _StatsOut;
+
+// Flag bits of an air cell. A neighbor is open when the pressure of the neighbor takes part in the solve.
+#define FLAG_OPEN_XM 1u
+#define FLAG_OPEN_XP 2u
+#define FLAG_OPEN_YM 4u
+#define FLAG_OPEN_YP 8u
+#define FLAG_OPEN_ZM 16u
+#define FLAG_OPEN_ZP 32u
+#define FLAG_TOP 64u        // the neighbor above is outside the top face: pressure 0
+#define FLAG_AIR 128u
+
+int3 GridSize() { return int3(_WindGridSizeX, _WindGridSizeY, _WindGridSizeZ); }
+float3 GridExtent() { return float3(GridSize()) * _WindCellSize; }
+
+bool InGrid(int3 c)
+{
+    return all(c >= 0) && all(c < GridSize());
+}
+
+// A cell outside the lateral faces or the top face is air. A cell under the bottom face is solid.
+bool IsSolid(int3 c)
+{
+    if (c.y < 0) return true;
+    if (!InGrid(c)) return false;
+    return _SolidMask[c] > 0.5;
+}
+
+// A ground cell is an air cell with a solid cell directly below.
+bool IsGround(int3 c)
+{
+    return InGrid(c) && !IsSolid(c) && IsSolid(c - int3(0, 1, 0));
+}
+
+float GroundHeightAt(float2 xz)
+{
+    float2 uv = xz / (float2(_WindGridSizeX, _WindGridSizeZ) * _WindCellSize);
+    return _GroundHeight.SampleLevel(fireca_linear_clamp_sampler, uv, 0);
+}
+
+// The background wind profile. h is the height above Ground Height.
+float Profile(float h)
+{
+    float hc = clamp(h, 0.0, _ProfileCapM);
+    return log((hc + _Z0) / _Z0) / log((6.1 + _Z0) / _Z0);
+}
+
+// The background wind at a position (relative to the Wind Grid origin).
+float2 BackgroundAt(float3 p)
+{
+    float h = p.y + _WindBottomY - GroundHeightAt(p.xz);
+    return _BackgroundWind * Profile(h);
+}
+
+// Trilinear samples of the staggered components at a position (relative to the Wind Grid origin).
+float SampleU(float3 p) { return _VelocityRead.SampleLevel(fireca_linear_clamp_sampler, (p + float3(0.5 * _WindCellSize, 0.0, 0.0)) / GridExtent(), 0).x; }
+float SampleV(float3 p) { return _VelocityRead.SampleLevel(fireca_linear_clamp_sampler, (p + float3(0.0, 0.5 * _WindCellSize, 0.0)) / GridExtent(), 0).y; }
+float SampleW(float3 p) { return _VelocityRead.SampleLevel(fireca_linear_clamp_sampler, (p + float3(0.0, 0.0, 0.5 * _WindCellSize)) / GridExtent(), 0).z; }
+float SampleTheta(float3 p) { return _VelocityRead.SampleLevel(fireca_linear_clamp_sampler, p / GridExtent(), 0).w; }
+float3 SampleVelocity(float3 p) { return float3(SampleU(p), SampleV(p), SampleW(p)); }
+
+float3 CellCenter(int3 c) { return (float3(c) + 0.5) * _WindCellSize; }
+
+// Blocked faces carry no flow. The bottom face of the Wind Grid is blocked. The lateral faces are open.
+bool FaceBlockedX(int3 c) { return IsSolid(c) || IsSolid(c - int3(1, 0, 0)); }
+bool FaceBlockedY(int3 c) { return IsSolid(c) || IsSolid(c - int3(0, 1, 0)); }
+bool FaceBlockedZ(int3 c) { return IsSolid(c) || IsSolid(c - int3(0, 0, 1)); }
+
+// ---- load ----
+
+// Fills the velocity with background(h), and clears theta, the smoke, and the pressure.
+[numthreads(4, 4, 4)]
+void InitKernel(uint3 id : SV_DispatchThreadID)
+{
+    int3 c = int3(id);
+    if (!InGrid(c)) return;
+    float3 pc = CellCenter(c);
+    float half = 0.5 * _WindCellSize;
+    float u = FaceBlockedX(c) ? 0.0 : BackgroundAt(pc - float3(half, 0.0, 0.0)).x;
+    float w = FaceBlockedZ(c) ? 0.0 : BackgroundAt(pc - float3(0.0, 0.0, half)).y;
+    _VelocityOut[c] = float4(u, 0.0, w, 0.0);
+    _SmokeOut[c] = 0.0;
+    _Pressure[c] = 0.0;
+}
+
+[numthreads(4, 4, 4)]
+void FlagsKernel(uint3 id : SV_DispatchThreadID)
+{
+    int3 c = int3(id);
+    if (!InGrid(c)) return;
+    uint flags = 0u;
+    if (!IsSolid(c))
+    {
+        flags = FLAG_AIR;
+        // A neighbor outside a lateral face or the bottom face, and a solid neighbor, use the pressure of the cell.
+        int3 n;
+        n = c - int3(1, 0, 0); if (InGrid(n) && !IsSolid(n)) flags |= FLAG_OPEN_XM;
+        n = c + int3(1, 0, 0); if (InGrid(n) && !IsSolid(n)) flags |= FLAG_OPEN_XP;
+        n = c - int3(0, 1, 0); if (InGrid(n) && !IsSolid(n)) flags |= FLAG_OPEN_YM;
+        n = c + int3(0, 1, 0); if (InGrid(n) && !IsSolid(n)) flags |= FLAG_OPEN_YP;
+        n = c - int3(0, 0, 1); if (InGrid(n) && !IsSolid(n)) flags |= FLAG_OPEN_ZM;
+        n = c + int3(0, 0, 1); if (InGrid(n) && !IsSolid(n)) flags |= FLAG_OPEN_ZP;
+        // A neighbor outside the top face has a pressure of 0.
+        if (c.y == _WindGridSizeY - 1) flags |= FLAG_TOP;
+    }
+    _FlagsOut[c] = (float)flags / 255.0;
+}
+
+uint LoadFlags(int3 c) { return (uint)(_FlagsRead[c] * 255.0 + 0.5); }
+
+// ---- step 1: advect ----
+
+float3 ClampToGrid(float3 p) { return clamp(p, float3(0.0, 0.0, 0.0), GridExtent()); }
+
+[numthreads(4, 4, 4)]
+void AdvectKernel(uint3 id : SV_DispatchThreadID)
+{
+    int3 c = int3(id);
+    if (!InGrid(c)) return;
+    float3 pc = CellCenter(c);
+    float half = 0.5 * _WindCellSize;
+
+    // Trace each face center and the cell center back along the velocity.
+    float3 pu = pc - float3(half, 0.0, 0.0);
+    float3 pv = pc - float3(0.0, half, 0.0);
+    float3 pw = pc - float3(0.0, 0.0, half);
+    float u = SampleU(ClampToGrid(pu - SampleVelocity(pu) * _DtWind));
+    float v = SampleV(ClampToGrid(pv - SampleVelocity(pv) * _DtWind));
+    float w = SampleW(ClampToGrid(pw - SampleVelocity(pw) * _DtWind));
+    float3 source = ClampToGrid(pc - SampleVelocity(pc) * _DtWind);
+    float theta = SampleTheta(source);
+    float smoke = _SmokeRead.SampleLevel(fireca_linear_clamp_sampler, source / GridExtent(), 0);
+
+    // Smoke source: the ground cell receives the smoke of the fire under the column.
+    smoke *= exp(-_DtWind / _SmokeLifeS);
+    if (IsGround(c))
+        smoke += _SmokeRate * _HeatFluxCoarse[c.xz] * _DtWind;
+
+    _VelocityOut[c] = float4(u, v, w, theta);
+    _SmokeOut[c] = smoke;
+}
+
+// ---- steps 2 to 6: stratify, buoyancy, ground sources, sponge, solid ----
+
+// theta of a cell after the stratify step.
+float StratifiedTheta(int3 c)
+{
+    if (!InGrid(c) || IsSolid(c)) return 0.0;
+    float vBottom = _VelocityRead[c].y;
+    int3 above = c + int3(0, 1, 0);
+    float vTop = above.y < _WindGridSizeY ? _VelocityRead[above].y : vBottom;
+    return _VelocityRead[c].w - 0.5 * (vBottom + vTop) * _StabilityKPerM * _DtWind;
+}
+
+[numthreads(4, 4, 4)]
+void ForcesKernel(uint3 id : SV_DispatchThreadID)
+{
+    int3 c = int3(id);
+    if (!InGrid(c)) return;
+    float4 value = _VelocityRead[c];
+    float3 vel = value.xyz;
+    bool solid = IsSolid(c);
+    int3 below = c - int3(0, 1, 0);
+
+    // 2. Stratify.
+    float theta = StratifiedTheta(c);
+
+    // 3. Buoyancy, on the bottom face, with the mean theta of the two cells that share the face.
+    float thetaFace = 0.5 * (theta + StratifiedTheta(below));
+    vel.y += _Gravity * thetaFace / _Theta0 * _DtWind;
+
+    // 4. Ground sources. The heat goes to the ground cell. The drag acts on every face of a ground cell.
+    if (IsGround(c))
+    {
+        float2 uv = (float2(c.xz) + 0.5) / float2(_WindGridSizeX, _WindGridSizeZ);
+        float heat = _HeatingGain * _SurfaceHeating.SampleLevel(fireca_linear_clamp_sampler, uv, 0)
+            + _CouplingGain * _FireConvFraction * 1000.0 * _HeatFluxCoarse.SampleLevel(fireca_linear_clamp_sampler, uv, 0);
+        theta += heat * _DtWind / (_RhoCp * _WindCellSize);
+    }
+    theta = clamp(theta, _ThetaMin, _ThetaMax);
+    float drag = 1.0 / (1.0 + _DragCoef * length(vel) * _DtWind / _WindCellSize);
+    bool ground = IsGround(c);
+    if (ground || IsGround(c - int3(1, 0, 0))) vel.x *= drag;
+    if (ground) vel.y *= drag;
+    if (ground || IsGround(c - int3(0, 0, 1))) vel.z *= drag;
+
+    // 5. Sponge: blend toward background(h) in the lateral zones and the top zone.
+    float3 cells = float3(GridSize());
+    float lateral = min(min(c.x + 0.5, cells.x - c.x - 0.5), min(c.z + 0.5, cells.z - c.z - 0.5));
+    float top = cells.y - c.y - 0.5;
+    float weight = max(saturate(1.0 - lateral / _SpongeCells), saturate(1.0 - top / _SpongeTopCells)) * _DtWind / _SpongeTimeS;
+    if (weight > 0.0)
+    {
+        float3 pc = CellCenter(c);
+        float half = 0.5 * _WindCellSize;
+        float3 target = float3(BackgroundAt(pc - float3(half, 0.0, 0.0)).x, 0.0, BackgroundAt(pc - float3(0.0, 0.0, half)).y);
+        vel = lerp(vel, target, saturate(weight));
+        theta = lerp(theta, 0.0, saturate(weight));
+    }
+
+    // 6. Solid: no flow through a blocked face.
+    if (FaceBlockedX(c)) vel.x = 0.0;
+    if (FaceBlockedY(c)) vel.y = 0.0;
+    if (FaceBlockedZ(c)) vel.z = 0.0;
+    if (solid) theta = 0.0;
+
+    _VelocityOut[c] = float4(vel, theta);
+}
+
+// ---- step 7: divergence ----
+
+float CellDivergence(int3 c)
+{
+    float3 v0 = _VelocityRead[c].xyz;
+    // A face outside the Wind Grid has the velocity of the face on the other side of the cell.
+    float u1 = c.x + 1 < _WindGridSizeX ? _VelocityRead[c + int3(1, 0, 0)].x : v0.x;
+    float v1 = c.y + 1 < _WindGridSizeY ? _VelocityRead[c + int3(0, 1, 0)].y : v0.y;
+    float w1 = c.z + 1 < _WindGridSizeZ ? _VelocityRead[c + int3(0, 0, 1)].z : v0.z;
+    return (u1 - v0.x + v1 - v0.y + w1 - v0.z) / _WindCellSize;
+}
+
+[numthreads(4, 4, 4)]
+void DivergenceKernel(uint3 id : SV_DispatchThreadID)
+{
+    int3 c = int3(id);
+    if (!InGrid(c)) return;
+    _DivergenceOut[c] = IsSolid(c) ? 0.0 : CellDivergence(c);
+}
+
+// ---- step 8: pressure, red-black Gauss-Seidel with over-relaxation ----
+
+[numthreads(4, 4, 4)]
+void PressureKernel(uint3 id : SV_DispatchThreadID)
+{
+    int3 c = int3(id);
+    if (!InGrid(c)) return;
+    if (((c.x + c.y + c.z) & 1) != _Parity) return;
+    uint flags = LoadFlags(c);
+    if ((flags & FLAG_AIR) == 0u) return;
+
+    // A neighbor that is not open has the pressure of the cell, so the neighbor drops out of the equation.
+    float sum = 0.0;
+    float count = 0.0;
+    if (flags & FLAG_OPEN_XM) { sum += _Pressure[c - int3(1, 0, 0)]; count += 1.0; }
+    if (flags & FLAG_OPEN_XP) { sum += _Pressure[c + int3(1, 0, 0)]; count += 1.0; }
+    if (flags & FLAG_OPEN_YM) { sum += _Pressure[c - int3(0, 1, 0)]; count += 1.0; }
+    if (flags & FLAG_OPEN_YP) { sum += _Pressure[c + int3(0, 1, 0)]; count += 1.0; }
+    if (flags & FLAG_OPEN_ZM) { sum += _Pressure[c - int3(0, 0, 1)]; count += 1.0; }
+    if (flags & FLAG_OPEN_ZP) { sum += _Pressure[c + int3(0, 0, 1)]; count += 1.0; }
+    if (flags & FLAG_TOP) count += 1.0;
+    if (count < 0.5) return;
+
+    float current = _Pressure[c];
+    float solved = (sum - _WindCellSize * _WindCellSize * _DivergenceRead[c]) / count;
+    _Pressure[c] = current + _SorOmega * (solved - current);
+}
+
+// ---- step 9: project ----
+
+[numthreads(4, 4, 4)]
+void ProjectKernel(uint3 id : SV_DispatchThreadID)
+{
+    int3 c = int3(id);
+    if (!InGrid(c)) return;
+    float4 value = _VelocityRead[c];
+    uint flags = LoadFlags(c);
+    if (flags & FLAG_AIR)
+    {
+        float p = _PressureRead[c];
+        // The pressure does not change the velocity component that points at a solid neighbor or at a lateral face.
+        if (flags & FLAG_OPEN_XM) value.x -= (p - _PressureRead[c - int3(1, 0, 0)]) / _WindCellSize;
+        if (flags & FLAG_OPEN_YM) value.y -= (p - _PressureRead[c - int3(0, 1, 0)]) / _WindCellSize;
+        if (flags & FLAG_OPEN_ZM) value.z -= (p - _PressureRead[c - int3(0, 0, 1)]) / _WindCellSize;
+    }
+    _VelocityOut[c] = value;
+}
+
+// ---- step 10: Surface Wind ----
+
+[numthreads(8, 8, 1)]
+void SurfaceWindKernel(uint3 id : SV_DispatchThreadID)
+{
+    if ((int)id.x >= _WindGridSizeX || (int)id.y >= _WindGridSizeZ) return;
+    int2 column = int2(id.xy);
+    float ground = _GroundHeight[column];
+    float2 centerXZ = (float2(column) + 0.5) * _WindCellSize;
+    float3 p = float3(centerXZ.x, ground + _SampleHeightM - _WindBottomY, centerXZ.y);
+    float3 v = SampleVelocity(p);
+
+    // The terrain normal, from the gradient of Ground Height.
+    int2 last = int2(_WindGridSizeX, _WindGridSizeZ) - 1;
+    int2 x0 = int2(max(column.x - 1, 0), column.y), x1 = int2(min(column.x + 1, last.x), column.y);
+    int2 z0 = int2(column.x, max(column.y - 1, 0)), z1 = int2(column.x, min(column.y + 1, last.y));
+    float dgdx = (_GroundHeight[x1] - _GroundHeight[x0]) / ((x1.x - x0.x) * _WindCellSize);
+    float dgdz = (_GroundHeight[z1] - _GroundHeight[z0]) / ((z1.y - z0.y) * _WindCellSize);
+    float3 n = normalize(float3(-dgdx, 1.0, -dgdz));
+
+    float3 vt = v - n * dot(v, n);
+    float scale = log((6.1 + _Z0) / _Z0) / log((_SampleHeightM + _Z0) / _Z0);
+    _SurfaceWindOut[column] = vt.xz * scale;
+}
+
+// ---- statistics for the Stats HUD and the tests ----
+
+[numthreads(8, 8, 1)]
+void StatsKernel(uint3 id : SV_DispatchThreadID)
+{
+    if ((int)id.x >= _WindGridSizeX || (int)id.y >= _WindGridSizeZ) return;
+    float maxSpeed = 0.0, nonFinite = 0.0, divergence = 0.0, air = 0.0;
+    float thetaLow = 0.0, thetaHigh = 0.0, smokeHigh = 0.0, smokeSum = 0.0;
+    for (int j = 0; j < _WindGridSizeY; j++)
+    {
+        int3 c = int3(id.x, j, id.y);
+        float4 value = _VelocityRead[c];
+        uint4 bits = asuint(value);
+        if (any((bits & 0x7F800000u) == 0x7F800000u))
+        {
+            nonFinite += 1.0;
+            continue;
+        }
+        maxSpeed = max(maxSpeed, length(value.xyz));
+        thetaLow = min(thetaLow, value.w);
+        thetaHigh = max(thetaHigh, value.w);
+        float smoke = _SmokeRead[c];
+        if ((asuint(smoke) & 0x7F800000u) == 0x7F800000u)
+            nonFinite += 1.0;
+        else
+        {
+            smokeHigh = max(smokeHigh, smoke);
+            smokeSum += smoke;
+        }
+        if (!IsSolid(c))
+        {
+            divergence += abs(CellDivergence(c));
+            air += 1.0;
+        }
+    }
+    int column = id.x + id.y * _WindGridSizeX;
+    _StatsOut[2 * column] = float4(maxSpeed, nonFinite, divergence, air);
+    _StatsOut[2 * column + 1] = float4(thetaLow, thetaHigh, smokeHigh, smokeSum);
+}
+
+[numthreads(4, 4, 4)]
+void ClearSmokeKernel(uint3 id : SV_DispatchThreadID)
+{
+    int3 c = int3(id);
+    if (!InGrid(c)) return;
+    _SmokeOut[c] = 0.0;
+}
