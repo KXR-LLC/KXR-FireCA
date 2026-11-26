@@ -36,6 +36,11 @@ namespace FireCA
         public const string SolidMask = "Solid Mask";
         /// <summary>Per-cell neighbor flags of the pressure solve. Not in docs/01-data-layers.md (docs/decisions.md, decision D19).</summary>
         public const string WindFlags = "Wind Flags";
+        /// <summary>The target of the correct kernel of the advection (docs/decisions.md, decision D31).</summary>
+        public const string VelocityScratch = "Velocity Scratch";
+        public const string SmokeScratch = "Smoke Scratch";
+        /// <summary>Vorticity (1/s) and turbulence speed (m/s) of each Wind Grid cell (decision D31).</summary>
+        public const string Turbulence = "Turbulence";
     }
 
     /// <summary>The texture registry. Creates and owns every simulation texture.</summary>
@@ -88,6 +93,9 @@ namespace FireCA
             new Spec(SimTextures.Divergence, GraphicsFormat.R16_SFloat, GridKind.Wind),
             new Spec(SimTextures.SolidMask, GraphicsFormat.R8_UNorm, GridKind.Wind),
             new Spec(SimTextures.WindFlags, GraphicsFormat.R8_UNorm, GridKind.Wind, filter: FilterMode.Point),
+            new Spec(SimTextures.VelocityScratch, GraphicsFormat.R32G32B32A32_SFloat, GridKind.Wind),
+            new Spec(SimTextures.SmokeScratch, GraphicsFormat.R16_SFloat, GridKind.Wind),
+            new Spec(SimTextures.Turbulence, GraphicsFormat.R16G16B16A16_SFloat, GridKind.Wind),
         };
 
         // Index 0 is the read copy. Index 1 is the write copy of a two-copy texture.
@@ -186,6 +194,15 @@ namespace FireCA
             var copies = _textures[name];
             if (copies.Length < 2) throw new InvalidOperationException($"'{name}' is not a two-copy texture.");
             (copies[0], copies[1]) = (copies[1], copies[0]);
+        }
+
+        /// <summary>Exchanges the read copies of two textures with the same format and the same size.</summary>
+        public void Exchange(string a, string b)
+        {
+            Texture[] first = _textures[a], second = _textures[b];
+            if (first[0].graphicsFormat != second[0].graphicsFormat || first[0].width != second[0].width)
+                throw new InvalidOperationException($"'{a}' and '{b}' do not have the same format and size.");
+            (first[0], second[0]) = (second[0], first[0]);
         }
 
         public void Dispose()

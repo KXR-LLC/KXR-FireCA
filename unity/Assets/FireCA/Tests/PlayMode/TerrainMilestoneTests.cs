@@ -246,12 +246,12 @@ namespace FireCA.Tests
             Assert.AreSame(read, registry.GetWrite(SimTextures.ArrivalTime));
             Assert.Greater(registry.TotalBytes, 0);
 
-            // The full-size textures use about 1.1 GB.
+            // The full-size textures use about 1.4 GB: 1.2 GB, and 0.2 GB for the three textures of decision D31.
             Assert.IsTrue(_app.LoadScenario(DemoScenario), _app.LastError);
             yield return null;
             float megabytes = _app.Registry.TotalBytes / (1024f * 1024f);
             Debug.Log($"[FireCA test] Texture memory at the 4096 size: {megabytes:F0} MB.");
-            Assert.That(megabytes, Is.InRange(900f, 1300f));
+            Assert.That(megabytes, Is.InRange(900f, 1500f));
         }
 
         // ---- camera and Overlays ----

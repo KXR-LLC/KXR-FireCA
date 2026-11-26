@@ -361,3 +361,84 @@
 
 - The aerial image shows the vegetation of the image date, not of July 1994. The image also holds the sun shadows of the flight, which do not move with the Sim Clock.
 - The image has not been checked against a surveyed point. The check is by eye.
+
+## D30: Smoke light at night
+
+**Question.** At night, with a high smoke density, the smoke glows blue-white over a black terrain. `04-visualization.md` gives the Smoke Pass the light of the sun and an orange glow near the fire. It gives no rule for the ambient light on the smoke. What light does the smoke get at night?
+
+**Answer.**
+
+1. The cause is the ambient term of the Smoke Pass. The term was 2 to 4 nits at night, and the terrain gets no light at night. The auto exposure of the camera stops at EV 2, which shows 2 nits as a bright gray.
+2. The ambient luminance on the smoke at night is now 0.25 to 0.42 nits per color channel. By day the value is the same as before. The blend between the two uses the square of the day factor.
+3. The smoke above a point shades the ambient light. Two samples straight up give the depth. The shade stops at 0.2, which stands for the light that scatters more than once.
+4. The fire lights the smoke. At each step, the Smoke Pass reads Heat Flux Coarse below the point and at 12 points on two rings, with radii of 0.9 and 2.2 times the height above the ground. The sum sets an orange light of at most about 45 nits per full ring, and the light falls to half at 250 m above the ground. Smoke darkness lowers the light to 35 percent at most.
+5. The orange glow of step 6 of the Smoke Pass stays as before.
+
+**Reason.** A night smoke column has two light sources: the night sky, which is weak, and the fire below, which is strong and orange. The 45 nits of the fire light are too weak to see at a day exposure, so the day picture changes only through the shade of answer 3.
+
+**Results.** At 21:20 solar time on `south-canyon`, with a smoke density of 16, the smoke is dark with an orange side near the fire line and a faint blue-gray far from the fire. The frame rate with the 13 more texture reads per step is 400 frames per second and more at 1280 x 720 in the Editor.
+
+**Open points.**
+
+- The values are set by eye from captures. No measurement of a real smoke column stands behind them.
+- The terrain gets no light at night, so a night with a moon is not shown.
+
+## D31: Sharper advection, vorticity confinement, and turbulence in the display
+
+**Question.** A meteorologist saw the demo and expected more low-level turbulence where the wind meets the terrain. The Wind Particles and the smoke show a smooth flow. `03-weather-wind.md` gives the Wind Solver a semi-Lagrangian advect kernel and no turbulence. How does the project show more turbulence?
+
+**Answer.** There are two causes, and each one has its own answer.
+
+The first cause is the advect kernel. Each step blurs the field, so an eddy of a few cells fades in a few steps. Answers 1 to 4 change the Wind Solver.
+
+1. A correct kernel follows the advect kernel (the MacCormack method). The correct kernel advects the result forward again and compares the result with the field before the step. Half of the difference, times `advectionSharpness`, goes back into the result. The result stays inside the range of the 8 texels around the traced point, so the kernel makes no new peak.
+2. A cell next to the terrain keeps the `theta` of the advect kernel. The blur is the only mixing that takes the ground heat out of a cell with little flow. Without this rule, `theta` reaches 18 K in one hour of sun, and the fountains of decision D27 can come back.
+3. The correction acts only where the grid can hold an eddy and the wind can make one. The share is multiplied by two weights. The first weight is 0 up to 80 m above the ground and 1 from 208 m. The second weight is 0 up to a wind speed of 3 m/s and 1 from 8 m/s. The layer near the ground holds the slope winds and the Surface Wind sample. On 32 m cells that layer needs the blur of the advect kernel as its mixing. Without the weights, three acceptance criteria of M3 fail (see Results).
+4. A vorticity confinement force follows the buoyancy. The force has the same two weights. The default of `vorticityConfinement` is 0, so the force is off until the user moves the slider. The force is `vorticityConfinement * cellSize * (N x omega)`. `omega` is the vorticity, and `N` is the unit vector from low vorticity to high vorticity. The force turns with each eddy and gives back a part of the spin that the advect kernel removes. The change of one step stays under 20 percent of the wind speed at the face plus 0.02 m/s.
+
+The second cause is the cell size. An eddy smaller than about 100 m cannot exist on 32 m cells. Answers 5 to 8 show such eddies in the display only.
+
+5. A new texture, Turbulence, holds the vorticity and the turbulence speed of each air cell. The Wind Solver writes it at the end of each Wind step. The turbulence speed is the root of the sum of three squares:
+   - Shear: `0.31 * cellSize * |S|`, a Smagorinsky estimate. `|S|` is the strain rate of the wind.
+   - Ground: `2.2 * uStar`, with `uStar = 0.4 * speed / ln((z + z0) / z0)`, the log law. `z` is the height above the ground. The part falls to 0 at 600 m.
+   - Heat: `0.6 * sqrt(g / theta0 * theta * cellSize)`, the free-fall speed of warm air over one cell.
+
+   The turbulence speed stops at 15 m/s.
+6. The Wind Particles add `turbulenceGain * turbulenceSpeed * field` to the velocity of each particle. The field is a sum of 6 plane waves with wavelengths from 44 m to 197 m, in `FireCATurbulence.hlsl`. The field has no divergence and a mean square of 1.
+7. The Smoke Pass moves each sample point by `turbulenceGain * turbulenceSpeed * 14 s`, and by 70 m at most, along a smooth noise vector with scales of 180 m and 80 m. The Smoke Pass does not use the plane waves, because the steps of the ray march are longer than the short waves and the result shows stripes.
+8. The turbulence of the display does not change the Wind Solver, the Surface Wind, or the fire. Whether gusts under the cell size must push the fire is an open point.
+9. The Control Panel has a Wind Solver section with two sliders, "Advection sharpness" and "Vorticity confinement". The Display section has a slider "Turbulence in smoke and particles" from 0 to 3, with a default of 1. With both Wind Solver sliders at 0, the Wind Solver is the same as before. A point with no smoke before the move of answer 7 is skipped, which keeps the cost of the Smoke Pass low.
+10. The texture registry has three more Wind Grid textures: Velocity Scratch, Smoke Scratch, and Turbulence. The texture memory at the 4096 size rises from 1202 MB to 1410 MB. The correct kernel writes the scratch textures, and the registry then exchanges each scratch texture with the read copy.
+
+**Reason.** The answers keep the two things apart. Answers 1 to 4 are a change of the model, and the fire sees them through the Surface Wind. Answers 5 to 8 are a picture of something that the model cannot hold, with a size that comes from the model. The shapes of the small eddies are made up. Their strength and their place are not.
+
+**Results.** The first design had no weights (answer 3) and a default confinement of 0.02. Three acceptance criteria of M3 then failed on `synthetic-canyon-01`. The table shows the steps to the final design.
+
+| Design | Upslope at 14:00 (must be 70 percent or more) | Downslope at 02:00 (must be 70 percent or more) | Canyon floor off the axis (must be under 25 degrees) | Narrow section faster than upstream |
+|---|---|---|---|---|
+| No weights, confinement 0.02 | 37.0 percent | 64.2 percent | 22.3 degrees | No |
+| No weights, confinement 0 | 21.7 percent | 62.9 percent | 11.5 degrees | No |
+| Height weight, confinement 0.02 | 67.5 percent | 38.8 percent | 10.8 degrees | No |
+| Both weights, confinement 0.02 | 92.9 percent | 94.6 percent | 30.8 degrees | Not measured |
+| Both weights, confinement 0 (final) | 92.9 percent | 94.6 percent | 17.1 degrees | Yes (0.94 m/s against 0.28 m/s) |
+
+With less blur, the upslope layer is thinner than one cell, and the Surface Wind sample at 48 m reads the return flow above it. The confinement makes the flow in the canyon unsteady, and the criteria read one moment of the flow.
+
+The next table is `south-canyon`, sun and no fire, 1800 Wind steps after the spin-up, with the final design. The vorticity values are means over the air cells inside the relaxation zones.
+
+| Setting | Mean vorticity (1/s) | Cells over 0.05 1/s | Peak wind (m/s) | Highest theta (K) | Wind step (ms) |
+|---|---|---|---|---|---|
+| Sharpness 0, confinement 0 (before) | 0.0084 | 5.0 percent | 22.6 | 8.8 | 5.1 |
+| Sharpness 1, confinement 0 (default) | 0.0104 | 7.0 percent | 23.1 | 11.5 | 5.7 |
+| Sharpness 1, confinement 0.02 | 0.0136 | 8.9 percent | 27.4 | 6.6 | 5.8 |
+| Sharpness 1, confinement 0.06 | 0.0569 | 34.8 percent | 33.8 | 3.7 | 5.8 |
+
+No run holds a NaN value. The default gives 23 percent more mean vorticity and 40 percent more cells with a strong vorticity. That is a modest change. The confinement gives more, at the price of the channeling criterion. Without the weights, a confinement of 0.1 fills the Wind Grid with noise, so the range stops at 0.06. The mean turbulence speed is 0.15 to 0.7 m/s over all air cells, and the highest values are 5 to 8 m/s. Near the ground the ground part is about a quarter of the wind speed. The Smoke Pass with the turbulence costs about 17 percent of the frame rate in the Editor at 1280 x 720 (369 frames per second without, 305 with).
+
+**Open points.**
+
+- The values of answers 3 to 6 are not checked against a measurement. A meteorologist must review the three parts of the turbulence speed.
+- The low-level turbulence that the meteorologist asked for is in the display only. The Wind Solver cannot hold it on 32 m cells, and the layer under 80 m keeps the old advection. Finer cells near the ground are the real answer.
+- The acceptance criteria of M3 read one moment of the flow. A solver with more eddies needs criteria that read a mean over time.
+- The fire does not feel the small gusts (answer 7).
+- The plane waves of the Wind Particles repeat in space. A view from far away can show the pattern at a high `turbulenceGain`.

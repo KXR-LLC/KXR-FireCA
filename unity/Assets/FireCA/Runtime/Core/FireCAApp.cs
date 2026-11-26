@@ -72,6 +72,30 @@ namespace FireCA
         /// <summary>The strength of the billows in the Smoke Pass, from 0 to 1.</summary>
         public float SmokeBillows { get; set; } = 0.5f;
         /// <summary>The fire coupling gain that the Control Panel sets, from 0 to 2. The value applies to each loaded Scenario.</summary>
+        public const float MaxTurbulenceGain = 3f;
+        /// <summary>
+        /// Multiplier on the turbulence speed in the Wind Particles and the Smoke Pass (decision D31). The value 0
+        /// turns the turbulence of the display off. The value does not change the Wind Solver or the fire.
+        /// </summary>
+        public float TurbulenceGain { get => _turbulenceGain; set => _turbulenceGain = Mathf.Clamp(value, 0f, MaxTurbulenceGain); }
+        float _turbulenceGain = 1f;
+
+        /// <summary>The share of the MacCormack correction in the advection of the Wind Solver, from 0 to 1 (decision D31).</summary>
+        public float AdvectionSharpness
+        {
+            get => _advectionSharpness;
+            set { _advectionSharpness = Mathf.Clamp01(value); if (Wind != null) Wind.AdvectionSharpness = _advectionSharpness; }
+        }
+        float _advectionSharpness = WindSolver.DefaultAdvectionSharpness;
+
+        /// <summary>The vorticity confinement factor of the Wind Solver (decision D31). The value 0 turns the force off.</summary>
+        public float VorticityConfinement
+        {
+            get => _vorticityConfinement;
+            set { _vorticityConfinement = Mathf.Clamp(value, 0f, WindSolver.MaxVorticityConfinement); if (Wind != null) Wind.VorticityConfinement = _vorticityConfinement; }
+        }
+        float _vorticityConfinement = WindSolver.DefaultVorticityConfinement;
+
         public float CouplingGain
         {
             get => _couplingGain;
@@ -220,7 +244,7 @@ namespace FireCA
             };
             Weather.Initialize(files);
             // The Wind Solver fills the velocity with the background wind. The spin-up runs in the Step Scheduler.
-            Wind = new WindSolver(windCompute, Registry, Weather, files.Data) { Enabled = WindSolverEnabled, CouplingGain = _couplingGain };
+            Wind = new WindSolver(windCompute, Registry, Weather, files.Data) { Enabled = WindSolverEnabled, CouplingGain = _couplingGain, AdvectionSharpness = _advectionSharpness, VorticityConfinement = _vorticityConfinement };
             if (Wind.Enabled) Wind.Initialize();
             Spread = new SpreadSolver(spreadCompute, Registry, Weather);
             Spread.Reset();

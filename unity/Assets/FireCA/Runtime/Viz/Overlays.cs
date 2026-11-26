@@ -163,6 +163,7 @@ namespace FireCA
         static readonly int SurfaceWindId = Shader.PropertyToID("_FireCA_SurfaceWind");
         static readonly int VelocityId = Shader.PropertyToID("_FireCA_Velocity");
         static readonly int SmokeId = Shader.PropertyToID("_FireCA_Smoke");
+        static readonly int TurbulenceId = Shader.PropertyToID("_FireCA_Turbulence");
         static readonly int SolidMaskId = Shader.PropertyToID("_FireCA_SolidMask");
         static readonly int GroundHeightId = Shader.PropertyToID("_FireCA_GroundHeight");
         static readonly int WindGridId = Shader.PropertyToID("_FireCA_WindGrid");
@@ -179,6 +180,7 @@ namespace FireCA
             Shader.SetGlobalTexture(SurfaceWindId, registry.Get(SimTextures.SurfaceWind));
             Shader.SetGlobalTexture(VelocityId, registry.Get(SimTextures.Velocity));
             Shader.SetGlobalTexture(SmokeId, registry.Get(SimTextures.Smoke));
+            Shader.SetGlobalTexture(TurbulenceId, registry.Get(SimTextures.Turbulence));
             Shader.SetGlobalTexture(SolidMaskId, registry.Get(SimTextures.SolidMask));
             Shader.SetGlobalTexture(GroundHeightId, registry.Get(SimTextures.GroundHeight));
             Shader.SetGlobalTexture(HeatFluxCoarseId, registry.Get(SimTextures.HeatFluxCoarse));

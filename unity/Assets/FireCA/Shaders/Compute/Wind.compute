@@ -10,6 +10,8 @@
 #pragma kernel InitKernel
 #pragma kernel FlagsKernel
 #pragma kernel AdvectKernel
+#pragma kernel CorrectKernel
+#pragma kernel TurbulenceKernel
 #pragma kernel ForcesKernel
 #pragma kernel DivergenceKernel
 #pragma kernel PressureKernel
@@ -44,11 +46,16 @@ float _SmokeLifeS;
 float _SorOmega;
 float _SampleHeightM;
 float _StabilityKPerM;
+float _AdvectionSharpness;      // 0: semi-Lagrangian advection. 1: the full MacCormack correction (decision D31)
+float _VorticityConfinement;    // the confinement factor, no unit. 0 turns the force off
 float2 _BackgroundWind;     // background wind at 6.1 m, m/s (X, Z), pointing where the wind goes
 int _Parity;                // 0: red cells, 1: black cells
 
 Texture3D<float4> _VelocityRead;
 Texture3D<float> _SmokeRead;
+Texture3D<float4> _VelocityHat;     // the result of the advect kernel, for the correct kernel
+Texture3D<float> _SmokeHat;
+Texture3D<float4> _TurbulenceRead;  // xyz: vorticity at the cell center, 1/s. w: turbulence speed, m/s
 Texture3D<float> _SolidMask;
 Texture3D<float> _FlagsRead;
 Texture3D<float> _DivergenceRead;
@@ -60,6 +67,7 @@ SamplerState fireca_linear_clamp_sampler;
 
 RWTexture3D<float4> _VelocityOut;
 RWTexture3D<float> _SmokeOut;
+RWTexture3D<float4> _TurbulenceOut;
 RWTexture3D<float> _FlagsOut;
 RWTexture3D<float> _DivergenceOut;
 RWTexture3D<float> _Pressure;
@@ -178,6 +186,31 @@ uint LoadFlags(int3 c) { return (uint)(_FlagsRead[c] * 255.0 + 0.5); }
 
 // ---- step 1: advect ----
 
+// The correct kernel and the vorticity confinement act on the air aloft only (docs/decisions.md, decision D31).
+// The weight is 0 up to 80 m above the ground and 1 from 208 m. The layer below holds the slope winds and the
+// Surface Wind sample. On 32 m cells that layer needs the blur of the advect kernel as its mixing.
+// The weight is 0 up to a wind speed of 3 m/s and 1 from 8 m/s. Wind over terrain makes eddies when it is strong.
+// The slow slope winds of a calm day or a calm night keep the blur as their mixing.
+float WindyWeight(float speed)
+{
+    return saturate((speed - 3.0) / 5.0);
+}
+
+float AloftWeight(float3 p)
+{
+    float h = p.y + _WindBottomY - GroundHeightAt(p.xz);
+    return saturate((h - 80.0) / 128.0);
+}
+
+// Smoke source: the ground cell receives the smoke of the fire under the column.
+float SmokeDecayAndSource(int3 c, float smoke)
+{
+    smoke *= exp(-_DtWind / _SmokeLifeS);
+    if (IsGround(c))
+        smoke += _SmokeRate * _HeatFluxCoarse[c.xz] * _DtWind;
+    return smoke;
+}
+
 float3 ClampToGrid(float3 p) { return clamp(p, float3(0.0, 0.0, 0.0), GridExtent()); }
 
 [numthreads(4, 4, 4)]
@@ -199,10 +232,91 @@ void AdvectKernel(uint3 id : SV_DispatchThreadID)
     float theta = SampleTheta(source);
     float smoke = _SmokeRead.SampleLevel(fireca_linear_clamp_sampler, source / GridExtent(), 0);
 
-    // Smoke source: the ground cell receives the smoke of the fire under the column.
-    smoke *= exp(-_DtWind / _SmokeLifeS);
-    if (IsGround(c))
-        smoke += _SmokeRate * _HeatFluxCoarse[c.xz] * _DtWind;
+    // With a sharpness above 0, the correct kernel runs next and applies the smoke decay and the smoke source.
+    if (_AdvectionSharpness <= 0.0)
+        smoke = SmokeDecayAndSource(c, smoke);
+
+    _VelocityOut[c] = float4(u, v, w, theta);
+    _SmokeOut[c] = smoke;
+}
+
+// ---- step 1b: correct (MacCormack, docs/decisions.md, decision D31) ----
+
+// The lowest and the highest value of the 8 texels around a sample point. offset is the stagger of the component.
+void TexelBounds(float3 p, float3 offset, out float4 lo, out float4 hi)
+{
+    int3 base = int3(floor((p + offset) / _WindCellSize - 0.5));
+    int3 last = GridSize() - 1;
+    lo = float4(1.0e30, 1.0e30, 1.0e30, 1.0e30);
+    hi = -lo;
+    for (int n = 0; n < 8; n++)
+    {
+        float4 value = _VelocityRead[clamp(base + int3(n & 1, (n >> 1) & 1, (n >> 2) & 1), 0, last)];
+        lo = min(lo, value);
+        hi = max(hi, value);
+    }
+}
+
+float SampleHatU(float3 p) { return _VelocityHat.SampleLevel(fireca_linear_clamp_sampler, (p + float3(0.5 * _WindCellSize, 0.0, 0.0)) / GridExtent(), 0).x; }
+float SampleHatV(float3 p) { return _VelocityHat.SampleLevel(fireca_linear_clamp_sampler, (p + float3(0.0, 0.5 * _WindCellSize, 0.0)) / GridExtent(), 0).y; }
+float SampleHatW(float3 p) { return _VelocityHat.SampleLevel(fireca_linear_clamp_sampler, (p + float3(0.0, 0.0, 0.5 * _WindCellSize)) / GridExtent(), 0).z; }
+
+// The advect kernel loses the small eddies, because each step blurs the field. The correct kernel measures the
+// loss: it advects the result forward again and compares with the field before the step. Half of the difference
+// goes back into the result. The result stays inside the range of the 8 texels around the traced point.
+[numthreads(4, 4, 4)]
+void CorrectKernel(uint3 id : SV_DispatchThreadID)
+{
+    int3 c = int3(id);
+    if (!InGrid(c)) return;
+    float3 pc = CellCenter(c);
+    float half = 0.5 * _WindCellSize;
+    float4 before = _VelocityRead[c];
+    float4 hat = _VelocityHat[c];
+    float gain = 0.5 * saturate(_AdvectionSharpness) * AloftWeight(pc) * WindyWeight(length(SampleVelocity(pc)));
+    float4 lo, hi;
+
+    float3 pu = pc - float3(half, 0.0, 0.0);
+    float3 move = SampleVelocity(pu) * _DtWind;
+    float u = hat.x + gain * (before.x - SampleHatU(ClampToGrid(pu + move)));
+    TexelBounds(ClampToGrid(pu - move), float3(half, 0.0, 0.0), lo, hi);
+    u = clamp(u, lo.x, hi.x);
+
+    float3 pv = pc - float3(0.0, half, 0.0);
+    move = SampleVelocity(pv) * _DtWind;
+    float v = hat.y + gain * (before.y - SampleHatV(ClampToGrid(pv + move)));
+    TexelBounds(ClampToGrid(pv - move), float3(0.0, half, 0.0), lo, hi);
+    v = clamp(v, lo.y, hi.y);
+
+    float3 pw = pc - float3(0.0, 0.0, half);
+    move = SampleVelocity(pw) * _DtWind;
+    float w = hat.z + gain * (before.z - SampleHatW(ClampToGrid(pw + move)));
+    TexelBounds(ClampToGrid(pw - move), float3(0.0, 0.0, half), lo, hi);
+    w = clamp(w, lo.z, hi.z);
+
+    move = SampleVelocity(pc) * _DtWind;
+    float3 forward = ClampToGrid(pc + move) / GridExtent();
+    float3 back = ClampToGrid(pc - move);
+    float theta = hat.w + gain * (before.w - _VelocityHat.SampleLevel(fireca_linear_clamp_sampler, forward, 0).w);
+    TexelBounds(back, float3(0.0, 0.0, 0.0), lo, hi);
+    theta = clamp(theta, lo.w, hi.w);
+    // A cell next to the terrain keeps the theta of the advect kernel. The blur of the advect kernel is the only
+    // mixing that takes the ground heat out of a cell with little flow (decision D27), so it must stay there.
+    if (IsSolid(c - int3(1, 0, 0)) || IsSolid(c + int3(1, 0, 0)) || IsSolid(c - int3(0, 1, 0))
+        || IsSolid(c - int3(0, 0, 1)) || IsSolid(c + int3(0, 0, 1)))
+        theta = hat.w;
+
+    float smoke = _SmokeHat[c] + gain * (_SmokeRead[c] - _SmokeHat.SampleLevel(fireca_linear_clamp_sampler, forward, 0));
+    int3 base = int3(floor(back / _WindCellSize - 0.5));
+    int3 last = GridSize() - 1;
+    float smokeLo = 1.0e30, smokeHi = 0.0;
+    for (int n = 0; n < 8; n++)
+    {
+        float value = _SmokeRead[clamp(base + int3(n & 1, (n >> 1) & 1, (n >> 2) & 1), 0, last)];
+        smokeLo = min(smokeLo, value);
+        smokeHi = max(smokeHi, value);
+    }
+    smoke = SmokeDecayAndSource(c, clamp(smoke, smokeLo, smokeHi));
 
     _VelocityOut[c] = float4(u, v, w, theta);
     _SmokeOut[c] = smoke;
@@ -218,6 +332,28 @@ float StratifiedTheta(int3 c)
     int3 above = c + int3(0, 1, 0);
     float vTop = above.y < _WindGridSizeY ? _VelocityRead[above].y : vBottom;
     return _VelocityRead[c].w - 0.5 * (vBottom + vTop) * _StabilityKPerM * _DtWind;
+}
+
+float VorticityMagnitude(int3 c, float fallback)
+{
+    if (!InGrid(c) || IsSolid(c)) return fallback;
+    return length(_TurbulenceRead[c].xyz);
+}
+
+// Vorticity confinement: an acceleration that turns with each eddy and so gives back a part of the spin that the
+// advect kernel removes. N points from low vorticity to high vorticity.
+float3 ConfinementForce(int3 c)
+{
+    if (!InGrid(c) || IsSolid(c)) return float3(0.0, 0.0, 0.0);
+    float3 omega = _TurbulenceRead[c].xyz;
+    float m = length(omega);
+    float3 gradient = float3(
+        VorticityMagnitude(c + int3(1, 0, 0), m) - VorticityMagnitude(c - int3(1, 0, 0), m),
+        VorticityMagnitude(c + int3(0, 1, 0), m) - VorticityMagnitude(c - int3(0, 1, 0), m),
+        VorticityMagnitude(c + int3(0, 0, 1), m) - VorticityMagnitude(c - int3(0, 0, 1), m));
+    float size = length(gradient);
+    if (size < 1.0e-6) return float3(0.0, 0.0, 0.0);
+    return _VorticityConfinement * _WindCellSize * cross(gradient / size, omega);
 }
 
 [numthreads(4, 4, 4)]
@@ -236,6 +372,19 @@ void ForcesKernel(uint3 id : SV_DispatchThreadID)
     // 3. Buoyancy, on the bottom face, with the mean theta of the two cells that share the face.
     float thetaFace = 0.5 * (theta + StratifiedTheta(below));
     vel.y += _Gravity * thetaFace / _Theta0 * _DtWind;
+
+    // 3b. Vorticity confinement (decision D31). The force is at the cell centers. A face takes the mean of the two
+    // cells that share it. The change of one step stays under a share of the wind speed at the face.
+    if (_VorticityConfinement > 0.0 && !solid)
+    {
+        float3 here = ConfinementForce(c);
+        float3 push = 0.5 * _DtWind * float3(
+            here.x + ConfinementForce(c - int3(1, 0, 0)).x,
+            here.y + ConfinementForce(below).y,
+            here.z + ConfinementForce(c - int3(0, 0, 1)).z);
+        float cap = 0.2 * length(vel) + 0.02;
+        vel += clamp(push, -cap, cap) * AloftWeight(CellCenter(c)) * WindyWeight(length(vel));
+    }
 
     // 4. Ground sources. The heat goes to the ground cell. The drag acts on every face of a ground cell.
     if (IsGround(c))
@@ -366,6 +515,61 @@ void SurfaceWindKernel(uint3 id : SV_DispatchThreadID)
     float3 vt = v - n * dot(v, n);
     float scale = log((6.1 + _Z0) / _Z0) / log((_SampleHeightM + _Z0) / _Z0);
     _SurfaceWindOut[column] = vt.xz * scale;
+}
+
+// ---- step 11: Turbulence (docs/decisions.md, decision D31) ----
+
+// The velocity at a cell center: the mean of the two faces on each axis.
+float3 CenterVelocity(int3 c)
+{
+    float3 v0 = _VelocityRead[c].xyz;
+    float u1 = c.x + 1 < _WindGridSizeX ? _VelocityRead[c + int3(1, 0, 0)].x : v0.x;
+    float v1 = c.y + 1 < _WindGridSizeY ? _VelocityRead[c + int3(0, 1, 0)].y : v0.y;
+    float w1 = c.z + 1 < _WindGridSizeZ ? _VelocityRead[c + int3(0, 0, 1)].z : v0.z;
+    return 0.5 * (v0 + float3(u1, v1, w1));
+}
+
+// A neighbor outside the Wind Grid and a solid neighbor take the velocity of the cell.
+float3 NeighborVelocity(int3 n, float3 center)
+{
+    if (!InGrid(n) || IsSolid(n)) return center;
+    return CenterVelocity(n);
+}
+
+// Writes the vorticity and the turbulence speed of each air cell. The turbulence speed is an estimate of the
+// speed of the eddies that are too small for the Wind Grid. It has three parts: the shear of the wind
+// (a Smagorinsky estimate), the drag of the ground (the log law), and the heat of the air (a free-fall speed).
+[numthreads(4, 4, 4)]
+void TurbulenceKernel(uint3 id : SV_DispatchThreadID)
+{
+    int3 c = int3(id);
+    if (!InGrid(c)) return;
+    if (IsSolid(c))
+    {
+        _TurbulenceOut[c] = float4(0.0, 0.0, 0.0, 0.0);
+        return;
+    }
+    float3 vc = CenterVelocity(c);
+    float scale = 0.5 / _WindCellSize;
+    float3 gx = (NeighborVelocity(c + int3(1, 0, 0), vc) - NeighborVelocity(c - int3(1, 0, 0), vc)) * scale;
+    float3 gy = (NeighborVelocity(c + int3(0, 1, 0), vc) - NeighborVelocity(c - int3(0, 1, 0), vc)) * scale;
+    float3 gz = (NeighborVelocity(c + int3(0, 0, 1), vc) - NeighborVelocity(c - int3(0, 0, 1), vc)) * scale;
+    float3 omega = float3(gy.z - gz.y, gz.x - gx.z, gx.y - gy.x);
+
+    // |S| = sqrt(2 Sij Sij), with Sij the symmetric part of the velocity gradient.
+    float sxy = 0.5 * (gy.x + gx.y), sxz = 0.5 * (gz.x + gx.z), syz = 0.5 * (gz.y + gy.z);
+    float strain = sqrt(2.0 * (gx.x * gx.x + gy.y * gy.y + gz.z * gz.z) + 4.0 * (sxy * sxy + sxz * sxz + syz * syz));
+    float shear = 0.31 * _WindCellSize * strain;
+
+    float3 pc = CellCenter(c);
+    float z = max(pc.y + _WindBottomY - GroundHeightAt(pc.xz), 4.0);
+    float friction = 0.4 * length(vc) / log((z + _Z0) / _Z0);
+    float surface = 2.2 * friction * saturate(1.0 - z / 600.0);
+
+    float heat = 0.6 * sqrt(_Gravity / _Theta0 * max(_VelocityRead[c].w, 0.0) * _WindCellSize);
+
+    float speed = min(sqrt(shear * shear + surface * surface + heat * heat), 15.0);
+    _TurbulenceOut[c] = float4(omega, speed);
 }
 
 // ---- statistics for the Stats HUD and the tests ----

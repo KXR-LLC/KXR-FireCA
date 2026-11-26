@@ -70,6 +70,9 @@ The Wind footprint is the 2D grid with the X and Z cell counts of the Wind Grid 
 | Pressure | R32_SFloat, two copies | Pressure field of the projection | Wind Solver |
 | Divergence | R16_SFloat | Velocity divergence, 1/s | Wind Solver |
 | Solid Mask | R8_UNorm | 1 for a cell under the terrain, 0 for an air cell | Scenario loader |
+| Velocity Scratch | R32G32B32A32_SFloat | Target of the correct kernel of the advection (`decisions.md`, decision D31) | Wind Solver |
+| Smoke Scratch | R16_SFloat | Target of the correct kernel of the advection | Wind Solver |
+| Turbulence | R16G16B16A16_SFloat | Vorticity X, Y, Z (1/s) and turbulence speed (m/s) | Wind Solver |
 
 The requirements below apply to every texture in the registry.
 

@@ -88,6 +88,9 @@ namespace FireCA
             cs.SetFloat("_MinHeightM", MinHeightM);
             cs.SetFloat("_MaxHeightM", MaxHeightM);
             cs.SetInt("_Seed", (int)(++_frame * 747796405u));
+            cs.SetFloat("_TurbulenceGain", _app.TurbulenceGain);
+            cs.SetFloat("_TurbulenceTime", Time.unscaledTime);
+            cs.SetTexture(_kernel, "_TurbulenceRead", registry.Get(SimTextures.Turbulence));
             cs.SetInt("_WindGridSizeX", grid.WindCellsX);
             cs.SetInt("_WindGridSizeY", GridSpec.WindCellsY);
             cs.SetInt("_WindGridSizeZ", grid.WindCellsZ);

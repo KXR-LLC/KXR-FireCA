@@ -4,6 +4,8 @@
 
 #pragma kernel UpdateKernel
 
+#include "FireCATurbulence.hlsl"
+
 struct Particle
 {
     float4 positionAge;     // world position (m), age (s)
@@ -17,6 +19,8 @@ float _LifeS;               // a particle is removed after this many seconds
 float _MinHeightM;          // spawn height above the ground
 float _MaxHeightM;
 uint _Seed;
+float _TurbulenceGain;      // multiplier on the turbulence speed. 0 turns the turbulence of the particles off
+float _TurbulenceTime;      // real seconds
 
 int _WindGridSizeX;
 int _WindGridSizeY;
@@ -26,6 +30,7 @@ float _WindBottomY;
 
 Texture3D<float4> _VelocityRead;
 Texture3D<float> _SolidMask;
+Texture3D<float4> _TurbulenceRead;  // w: turbulence speed, m/s
 Texture2D<float> _GroundHeight;
 SamplerState fireca_linear_clamp_sampler;
 
@@ -93,6 +98,12 @@ void UpdateKernel(uint3 id : SV_DispatchThreadID)
     }
 
     float3 velocity = SampleVelocity(local);
+    // The eddies that are too small for the Wind Grid (docs/decisions.md, decision D31).
+    if (_TurbulenceGain > 0.0)
+    {
+        float speed = _TurbulenceRead.SampleLevel(fireca_linear_clamp_sampler, local / extent, 0).w;
+        velocity += _TurbulenceGain * speed * FireCA_TurbulenceField(position, _TurbulenceTime);
+    }
     position += velocity * _SpeedScale * _DeltaTime;
     p.positionAge = float4(position, age);
     p.velocitySeed = float4(velocity, 1.0);

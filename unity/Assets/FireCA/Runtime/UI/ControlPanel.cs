@@ -111,6 +111,7 @@ namespace FireCA
             BuildIgnitionSection(scroll);
             BuildWeatherSection(scroll);
             BuildFireSection(scroll);
+            BuildWindSolverSection(scroll);
             BuildDisplaySection(scroll);
         }
 
@@ -129,6 +130,18 @@ namespace FireCA
             _liveMoisture = WeatherSlider(section, "Live fuel moisture (percent)", 30f, 300f,
                 () => { if (_app.Weather != null) _app.Weather.SetLiveMoisture(_liveMoisture.value / 100f); });
             _liveMoisture.name = "live-moisture";
+        }
+
+        // ---- Wind Solver (docs/decisions.md, decision D31) ----
+
+        void BuildWindSolverSection(VisualElement parent)
+        {
+            var section = UiStyle.Section("Wind Solver");
+            parent.Add(section);
+            DisplaySlider(section, "Advection sharpness (0 is the smooth advection)", "advection-sharpness", 0f, 1f,
+                _app.AdvectionSharpness, v => _app.AdvectionSharpness = v);
+            DisplaySlider(section, "Vorticity confinement (0 turns the force off)", "vorticity-confinement", 0f, WindSolver.MaxVorticityConfinement,
+                _app.VorticityConfinement, v => _app.VorticityConfinement = v);
         }
 
         // ---- Weather ----
@@ -468,6 +481,7 @@ namespace FireCA
             DisplaySlider(section, "Smoke density", "smoke-density", 0f, FireCAApp.MaxSmokeDensity, _app.SmokeDensity, v => _app.SmokeDensity = v);
             DisplaySlider(section, "Smoke darkness", "smoke-darkness", 0f, 1f, _app.SmokeDarkness, v => _app.SmokeDarkness = v);
             DisplaySlider(section, "Smoke billows", "smoke-billows", 0f, 1f, _app.SmokeBillows, v => _app.SmokeBillows = v);
+            DisplaySlider(section, "Turbulence in smoke and particles", "turbulence-gain", 0f, FireCAApp.MaxTurbulenceGain, _app.TurbulenceGain, v => _app.TurbulenceGain = v);
 
             if (particles != null)
             {

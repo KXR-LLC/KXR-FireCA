@@ -68,9 +68,10 @@ The Smoke Pass is an HDRP Custom Pass at the Before Post Process injection point
 3. Sample the Smoke texture with trilinear filtering at each step.
 4. Accumulate the transmittance with the Beer-Lambert law.
 5. At each step, march 6 steps toward the sun to compute the light that reaches the smoke.
-6. Add an orange glow to smoke within 96 m of a ground cell whose Heat Flux Coarse is above 50 kW/m2.
+6. Add an orange glow to smoke within 96 m of a ground cell whose Heat Flux Coarse is above 50 kW/m2. Light the smoke farther away from Heat Flux Coarse as decision D30 in `decisions.md` describes.
 7. Blend the result over the camera color.
 8. Provide a density multiplier and an on-off toggle in the Control Panel.
+9. Move the sample point of step 3 with the turbulence of decision D31 in `decisions.md`.
 
 The Smoke Pass can render at half resolution with a depth-aware upsample if the full-resolution cost is above 3 ms.
 
@@ -80,7 +81,7 @@ Wind Particles are a VFX Graph effect that samples the Velocity texture of the W
 
 1. Spawn particles at random positions over the Fire Grid area.
 2. Spawn each particle at a height above the ground between 10 m and 400 m, with more particles near the ground.
-3. Move each particle with the Velocity sample at the position of the particle.
+3. Move each particle with the Velocity sample at the position of the particle. Add the turbulence of decision D31 in `decisions.md`.
 4. Multiply the particle motion by `particleSpeedScale`, with a default of 30. The Sim Clock time scale must not change the particle speed.
 5. Draw each particle as a streak along the velocity of the particle.
 6. Color each particle by wind speed with the Surface wind Overlay color map.

@@ -132,6 +132,8 @@ The Wind Solver is an incompressible fluid solver with buoyancy, on a collocated
 | `sorOmega` | 1.6 | Over-relaxation factor |
 | `sampleHeightM` | 48 m | Height above Ground Height for the Surface Wind sample |
 | `spinUpSteps` | 300 | Wind steps that run before the Sim Clock starts |
+| `advectionSharpness` | 1.0 | Share of the correction of the advection, from 0 to 1 (`decisions.md`, decision D31) |
+| `vorticityConfinement` | 0 | Vorticity confinement factor, from 0 to 0.06. The value 0 turns the force off. |
 
 ### Ground cells
 
@@ -152,6 +154,7 @@ background(h) = (bg.x * profile(h), 0, bg.z * profile(h))
 The Wind Solver must run the kernels below in the order given, once per Wind step.
 
 1. **Advect.** Trace each cell center back along the velocity by `dtWind`. Sample the read copy of Velocity and Smoke at the traced point with trilinear filtering. Write the result to the write copy.
+   When `advectionSharpness` is above 0, a correct kernel runs next. Decision D31 in `decisions.md` describes the correct kernel, the vorticity confinement force that follows the buoyancy, and the Turbulence write that follows the Surface Wind.
 2. **Stratify.** Subtract `velocity.y * stabilityKPerM * dtWind` from `theta`.
 3. **Buoyancy.** Add `g * theta / theta0 * dtWind` to `velocity.y`.
 4. **Ground sources.** In each ground cell, apply the ground source equations below.
@@ -176,7 +179,7 @@ velocity = velocity / (1 + dragCoef * speed * dtWind / cell)
 The requirements below apply to the Wind step.
 
 1. The advect kernel must clamp the traced point to the Wind Grid.
-2. The advect kernel must multiply the smoke by `exp(-dtWind / smokeLifeS)`.
+2. The advect kernel must multiply the smoke by `exp(-dtWind / smokeLifeS)`. When the correct kernel runs, the correct kernel does this in place of the advect kernel.
 3. The sponge weight must rise linearly from 0 at the inner edge of a relaxation zone to `dtWind / spongeTimeS` at the outer face.
 4. The pressure kernel must use the pressure of the cell for a solid neighbor and for a neighbor outside a lateral face or the bottom face.
 5. The pressure kernel must use a pressure of 0 for a neighbor outside the top face.

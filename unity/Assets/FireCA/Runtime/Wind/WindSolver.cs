@@ -52,6 +52,13 @@ namespace FireCA
         public float SorOmega = 1.6f;
         public float SampleHeightM = 48f;
         public int SpinUpSteps = 300;
+        /// <summary>The share of the MacCormack correction of the advection, from 0 to 1 (decision D31). 0 is the semi-Lagrangian advection.</summary>
+        public float AdvectionSharpness = DefaultAdvectionSharpness;
+        /// <summary>The vorticity confinement factor, from 0 to MaxVorticityConfinement. 0 turns the force off.</summary>
+        public float VorticityConfinement = DefaultVorticityConfinement;
+        public const float DefaultAdvectionSharpness = 1f;
+        public const float DefaultVorticityConfinement = 0f;
+        public const float MaxVorticityConfinement = 0.06f;
 
         readonly ComputeShader _cs;
         readonly TextureRegistry _registry;
@@ -59,7 +66,7 @@ namespace FireCA
         readonly GridSpec _grid;
         readonly float _stabilityKPerM;
         readonly ComputeBuffer _statsBuffer;
-        readonly int _init, _flags, _advect, _forces, _divergence, _pressure, _project, _surfaceWind, _stats;
+        readonly int _init, _flags, _advect, _correct, _turbulence, _forces, _divergence, _pressure, _project, _surfaceWind, _stats;
         bool _disposed;
 
         /// <summary>When false, the Step Scheduler runs no Wind step, and the Weather Model fills the Surface Wind.</summary>
@@ -85,6 +92,8 @@ namespace FireCA
             _init = _cs.FindKernel("InitKernel");
             _flags = _cs.FindKernel("FlagsKernel");
             _advect = _cs.FindKernel("AdvectKernel");
+            _correct = _cs.FindKernel("CorrectKernel");
+            _turbulence = _cs.FindKernel("TurbulenceKernel");
             _forces = _cs.FindKernel("ForcesKernel");
             _divergence = _cs.FindKernel("DivergenceKernel");
             _pressure = _cs.FindKernel("PressureKernel");
@@ -127,6 +136,8 @@ namespace FireCA
             _cs.SetFloat("_SorOmega", SorOmega);
             _cs.SetFloat("_SampleHeightM", SampleHeightM);
             _cs.SetFloat("_StabilityKPerM", _stabilityKPerM);
+            _cs.SetFloat("_AdvectionSharpness", Mathf.Clamp01(AdvectionSharpness));
+            _cs.SetFloat("_VorticityConfinement", Mathf.Clamp(VorticityConfinement, 0f, MaxVorticityConfinement));
             Vector2 wind = _weather.BackgroundWind;
             _cs.SetVector("_BackgroundWind", new Vector4(wind.x, wind.y, 0f, 0f));
         }
@@ -161,6 +172,7 @@ namespace FireCA
             StepCount = 0;
             SpinUpDone = 0;
             WriteSurfaceWind();
+            WriteTurbulence();
         }
 
         /// <summary>Runs the remaining spin-up steps at once. The spin-up does not advance the wind time.</summary>
@@ -195,6 +207,7 @@ namespace FireCA
             ComputeDivergence();
             SolvePressureAndProject();
             WriteSurfaceWind();
+            WriteTurbulence();
         }
 
         // Steps 1 to 6. The result is in the read copy of Velocity.
@@ -208,11 +221,32 @@ namespace FireCA
             _cs.SetTexture(_advect, "_SmokeOut", _registry.GetWrite(SimTextures.Smoke));
             _cs.SetTexture(_advect, "_HeatFluxCoarse", _registry.Get(SimTextures.HeatFluxCoarse));
             _cs.Dispatch(_advect, Gx, Gy, Gz);
-            _registry.Swap(SimTextures.Velocity);
-            _registry.Swap(SimTextures.Smoke);
 
-            // 2 to 6. Stratify, buoyancy, ground sources, sponge, solid.
+            if (AdvectionSharpness > 0f)
+            {
+                // 1b. Correct: the read copies and the write copies to the scratch textures. The scratch textures
+                // then become the read copies.
+                BindCommon(_correct);
+                _cs.SetTexture(_correct, "_VelocityRead", Velocity);
+                _cs.SetTexture(_correct, "_VelocityHat", VelocityWrite);
+                _cs.SetTexture(_correct, "_SmokeRead", _registry.Get(SimTextures.Smoke));
+                _cs.SetTexture(_correct, "_SmokeHat", _registry.GetWrite(SimTextures.Smoke));
+                _cs.SetTexture(_correct, "_HeatFluxCoarse", _registry.Get(SimTextures.HeatFluxCoarse));
+                _cs.SetTexture(_correct, "_VelocityOut", _registry.Get(SimTextures.VelocityScratch));
+                _cs.SetTexture(_correct, "_SmokeOut", _registry.Get(SimTextures.SmokeScratch));
+                _cs.Dispatch(_correct, Gx, Gy, Gz);
+                _registry.Exchange(SimTextures.Velocity, SimTextures.VelocityScratch);
+                _registry.Exchange(SimTextures.Smoke, SimTextures.SmokeScratch);
+            }
+            else
+            {
+                _registry.Swap(SimTextures.Velocity);
+                _registry.Swap(SimTextures.Smoke);
+            }
+
+            // 2 to 6. Stratify, buoyancy, vorticity confinement, ground sources, sponge, solid.
             BindCommon(_forces);
+            _cs.SetTexture(_forces, "_TurbulenceRead", _registry.Get(SimTextures.Turbulence));
             _cs.SetTexture(_forces, "_VelocityRead", Velocity);
             _cs.SetTexture(_forces, "_VelocityOut", VelocityWrite);
             _cs.SetTexture(_forces, "_SurfaceHeating", _registry.Get(SimTextures.SurfaceHeating));
@@ -262,6 +296,16 @@ namespace FireCA
             _cs.Dispatch(_surfaceWind, (_grid.WindCellsX + 7) / 8, (_grid.WindCellsZ + 7) / 8, 1);
         }
 
+        /// <summary>Step 11. Writes the Turbulence texture from the read copy of Velocity.</summary>
+        public void WriteTurbulence()
+        {
+            SetUniforms();
+            BindCommon(_turbulence);
+            _cs.SetTexture(_turbulence, "_VelocityRead", Velocity);
+            _cs.SetTexture(_turbulence, "_TurbulenceOut", _registry.Get(SimTextures.Turbulence));
+            _cs.Dispatch(_turbulence, Gx, Gy, Gz);
+        }
+
         /// <summary>Reads the statistics of the read copy of Velocity. The call waits for the GPU.</summary>
         public WindStats ReadStats()
         {
@@ -307,6 +351,7 @@ namespace FireCA
             SolvePressureAndProject();
             after = ReadStats().MeanAbsDivergence;
             WriteSurfaceWind();
+            WriteTurbulence();
             WindTime += DtWind;
             StepCount++;
         }
