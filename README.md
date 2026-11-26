@@ -25,7 +25,7 @@ The [Releases page](https://github.com/KXR-LLC/KXR-FireCA/releases) has a standa
 | Windows 10 or 11, 64 bit | Direct3D 12 | Extract the archive and run `FireCA.exe`. |
 | Linux, x86_64 | Vulkan | Extract the archive and run `./FireCA.x86_64`. |
 
-The simulation is sized for one RTX 5090. A GPU with less memory can fail to load a Scenario. The Linux player is built on Windows and is not yet tested on a Linux computer.
+The simulation is sized for one RTX 5090. A GPU with less memory can fail to load a Scenario. The Linux player is built on Windows. Release 0.1.0 ran well on a Linux computer with an NVIDIA RTX PRO 4000 Blackwell GPU.
 
 ## Build from source
 
