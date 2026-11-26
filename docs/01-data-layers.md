@@ -74,6 +74,8 @@ The Wind footprint is the 2D grid with the X and Z cell counts of the Wind Grid 
 | Smoke Scratch | R16_SFloat | Target of the correct kernel of the advection | Wind Solver |
 | Turbulence | R16G16B16A16_SFloat | Vorticity X, Y, Z (1/s) and turbulence speed (m/s) | Wind Solver |
 
+The Wind Nest has its own textures, with the names and the formats of the Wind Grid textures: Velocity, Velocity Scratch, Smoke, Smoke Scratch, Pressure, Divergence, Solid Mask, Wind Flags, Turbulence, Ground Height, and Surface Wind. The Wind Nest owns them, and the texture registry does not hold them (`decisions.md`, decision D32).
+
 The requirements below apply to every texture in the registry.
 
 1. The texture registry must create each texture with `enableRandomWrite` set to true, except Elevation and Fuel.

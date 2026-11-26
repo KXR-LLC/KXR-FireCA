@@ -442,3 +442,50 @@ No run holds a NaN value. The default gives 23 percent more mean vorticity and 4
 - The acceptance criteria of M3 read one moment of the flow. A solver with more eddies needs criteria that read a mean over time.
 - The fire does not feel the small gusts (answer 7).
 - The plane waves of the Wind Particles repeat in space. A view from far away can show the pattern at a high `turbulenceGain`.
+
+## D32: The Wind Nest
+
+**Question.** Decision D31 left the low-level turbulence out of the Wind Solver, because the 32 m cells cannot hold it. The user chose a nested grid over two other designs: thinner layers everywhere, and a grid that follows the terrain. How does the nested grid work?
+
+**Answer.**
+
+1. A new term: the Wind Nest is a second grid of the Wind Solver with smaller cells, over a box inside the Wind Grid. `Wind.compute` and the class `WindSolver` run both grids. A `WindDomain` gives the origin, the cell size, and the cell counts of a grid.
+2. The Wind Nest has at most 192 x 128 x 192 cells. The cell size is 8 m, 12 m, or 16 m, and the default is 12 m. At 12 m the box is 2304 m wide and 1536 m high. On a Scenario that is narrower than the box, the Wind Nest has fewer cells.
+3. The origin of the box is a multiple of the cell size, so each column covers whole Fire Grid cells. The bottom face is the lowest elevation in the box, rounded down to a multiple of the cell size.
+4. The Wind Nest has its own Ground Height and Solid Mask, from the same kernels as the Wind Grid. At 12 m, a column is the mean of 6 x 6 Fire Grid cells, so the terrain of the Wind Nest has ridges and gullies that the Wind Grid does not have.
+5. The coupling is one way. The Wind Nest starts from the state of the Wind Grid. In the relaxation zones, 12 cells wide at the lateral faces and 16 cells deep at the top face, the Wind Nest blends its velocity, `theta`, and smoke toward the Wind Grid, with a relaxation time of 6 s at the outer face. The Wind Nest does not change the Velocity of the Wind Grid.
+6. The Wind Nest runs 2 steps after each Wind step, each with half of `dtWind`. The spin-up of the Wind Grid runs with no Wind Nest.
+7. The ground sources of the Wind Nest read Surface Heating and Heat Flux Coarse of the Wind Grid at the place of each column. The smoke source is multiplied by 32 m over the cell size, so a column of the Wind Nest gets the same amount of smoke as a column of the Wind Grid.
+8. The fire sees the Wind Nest. The Surface Wind kernel of the Wind Grid takes, inside the box, the mean of 9 points of the Surface Wind of the Wind Nest. The two values blend between one and two zone widths from the faces. The value is one Wind step old.
+9. The weights of decision D31 are in cells, not in meters: the correct kernel and the vorticity confinement are off up to 2.5 cells above the ground and full from 6.5 cells. For the Wind Grid that is 80 m and 208 m, as before. For the Wind Nest at 12 m it is 30 m and 78 m. The ground part of the turbulence speed is multiplied by the cell size over 32 m.
+10. The Smoke Pass and the Wind Particles read the Wind Nest inside the box, with a blend over the zone width at the lateral faces and the top face. A ray of the Smoke Pass that crosses the box has 40 steps before the box, 96 steps in the box, and 40 steps after it. The billows are 60 percent weaker in the box.
+11. The app places the Wind Nest around the first ignition. The Control Panel has a toggle, a cell size slider, and a button that moves the Wind Nest to the point that the camera looks at. A move starts the Wind Nest again from the state of the Wind Grid.
+12. The tests of M1 to M6 and the benchmark of decision D25 run with no Wind Nest. The Wind Nest has the criteria of M7.
+
+**Reason.** A nested grid puts the cells where the fire is and leaves the rest of the model alone. The other designs cost more for less: thinner layers keep the 32 m width of a cell, and a grid that follows the terrain needs a new solver and does poorly on canyon walls. One-way coupling keeps the Wind Grid, and with it every result of M3 to M6, the same.
+
+**Results.** All 42 PlayMode tests pass: the 39 tests of M1 to M6 with no Wind Nest, and 3 tests for the criteria of M7.
+
+| Criterion of M7 | Result |
+|---|---|
+| 1. Flat flow, 128 x 128 x 128 cells of 8 m, 300 steps | Largest speed error 1.5 percent, largest direction error 0.12 degrees |
+| 2. Divergence after the project kernel | 0.00015 1/s at most |
+| 3. Vorticity under 150 m above the ground, `south-canyon` | Wind Nest 0.053 1/s, Wind Grid 0.030 1/s, ratio 1.76. Highest value 0.40 1/s against 0.12 1/s |
+| 4. Fire run of 2 simulated hours | No NaN value, peak wind 28.7 m/s, highest `theta` 16.7 K |
+| 5. Mean Surface Wind inside the box | Wind Grid (3.36, -1.22) m/s, Wind Nest (3.35, -1.20) m/s |
+| 6. Texture memory of the Wind Nest at 12 m | 315 MB. The Stats HUD shows 1725 MB with the Wind Nest |
+
+Criterion 2 first copied criterion 1 of M3: a value after the project kernel under 10 percent of the value before the pressure kernel. The Wind Nest gave 18 to 33 percent, with 30 to 60 iterations and over-relaxation factors from 1.6 to 1.85. The step of the Wind Nest is half as long and starts from a field with little divergence (0.0004 1/s), so the ratio is high while the value is low. The criterion is now the value.
+
+Cost on the RTX 5090: one Wind step with the 2 steps of the Wind Nest takes 12.4 ms to 16.8 ms, against 5.7 ms for the Wind Grid alone. That is under the limit of 3 times the cost that M7 sets. In the Editor at 1280 x 720 and a time scale of 60, the frame rate is about 235 frames per second with the Wind Nest and about 300 without. At a requested time scale of 1000, the achieved time scale is about 120 to 155 with the Wind Nest and about 340 without.
+
+The fire changes with the Wind Nest. In a run of 4 simulated hours on `south-canyon` from the Scenario ignition, the burned area is 14.3 ha with the Wind Nest and 7.0 ha without. The mean Surface Wind speed in the box is 3.3 m/s with the Wind Nest and 2.8 m/s without. Captures show no seam at the faces of the box, in the smoke or in the Wind Particles.
+
+**Open points.**
+
+- The coupling is one way. The Wind Grid runs its own, coarser plume in the same box, and the fire heat does not come back from the Wind Nest to the Wind Grid.
+- The Wind Nest reads Heat Flux Coarse, which is a mean over 32 m. A fire line is a few meters wide. A heat flux at the cell size of the Wind Nest is a later step.
+- The fire reads the Surface Wind at 32 m, so it sees the mean of the Wind Nest and not each gust.
+- The Wind Nest does not follow the fire. The user moves it, and a move loses the eddies of the Wind Nest for about a minute of simulated time.
+- The slope wind criteria of M3 are not run on the Wind Nest.
+- The slice plane and the Overlays show the Wind Grid only.

@@ -60,10 +60,25 @@ namespace FireCA
         public const float DefaultVorticityConfinement = 0f;
         public const float MaxVorticityConfinement = 0.06f;
 
+        /// <summary>Wind Grid cell size over the cell size of this grid. 1 for the Wind Grid.</summary>
+        public float SmokeSourceScale = 1f;
+        /// <summary>
+        /// The Wind Solver of the Wind Grid, when this instance runs the Wind Nest (decision D32). The relaxation
+        /// zones then blend toward the state of the parent. Null for the Wind Grid.
+        /// </summary>
+        public WindSolver Parent;
+        /// <summary>
+        /// The Wind Nest of this Wind Grid, or null. The Surface Wind kernel takes the Surface Wind of the Wind Nest
+        /// inside its box, and each Wind step runs the steps of the Wind Nest.
+        /// </summary>
+        public WindNest Nest;
+
         readonly ComputeShader _cs;
-        readonly TextureRegistry _registry;
+        readonly IWindTextures _registry;
         readonly WeatherModel _weather;
-        readonly GridSpec _grid;
+        readonly WindDomain _grid;
+        /// <summary>The place and the size of the grid of this instance.</summary>
+        public WindDomain Domain => _grid;
         readonly float _stabilityKPerM;
         readonly ComputeBuffer _statsBuffer;
         readonly int _init, _flags, _advect, _correct, _turbulence, _forces, _divergence, _pressure, _project, _surfaceWind, _stats;
@@ -81,13 +96,16 @@ namespace FireCA
         public float SpinUpProgress => SpinUpSteps <= 0 ? 1f : Mathf.Clamp01(SpinUpDone / (float)SpinUpSteps);
 
         public WindSolver(ComputeShader compute, TextureRegistry registry, WeatherModel weather, ScenarioData data)
+            : this(compute, registry, weather, data, WindDomain.OfWindGrid(registry.Grid)) { }
+
+        public WindSolver(ComputeShader compute, IWindTextures textures, WeatherModel weather, ScenarioData data, WindDomain domain)
         {
             _cs = compute;
-            _registry = registry;
+            _registry = textures;
             _weather = weather;
-            _grid = registry.Grid;
+            _grid = domain;
             _stabilityKPerM = data.weather.stabilityKPerM;
-            _statsBuffer = new ComputeBuffer(2 * _grid.WindCellsX * _grid.WindCellsZ, 4 * sizeof(float), ComputeBufferType.Structured);
+            _statsBuffer = new ComputeBuffer(2 * _grid.Nx * _grid.Nz, 4 * sizeof(float), ComputeBufferType.Structured);
 
             _init = _cs.FindKernel("InitKernel");
             _flags = _cs.FindKernel("FlagsKernel");
@@ -102,20 +120,50 @@ namespace FireCA
             _stats = _cs.FindKernel("StatsKernel");
         }
 
-        int Gx => (_grid.WindCellsX + 3) / 4;
-        int Gy => (GridSpec.WindCellsY + 3) / 4;
-        int Gz => (_grid.WindCellsZ + 3) / 4;
+        int Gx => (_grid.Nx + 3) / 4;
+        int Gy => (_grid.Ny + 3) / 4;
+        int Gz => (_grid.Nz + 3) / 4;
 
         Texture Velocity => _registry.Get(SimTextures.Velocity);
         Texture VelocityWrite => _registry.GetWrite(SimTextures.Velocity);
 
         void SetUniforms()
         {
-            _cs.SetInt("_WindGridSizeX", _grid.WindCellsX);
-            _cs.SetInt("_WindGridSizeY", GridSpec.WindCellsY);
-            _cs.SetInt("_WindGridSizeZ", _grid.WindCellsZ);
-            _cs.SetFloat("_WindCellSize", GridSpec.WindCellSizeM);
-            _cs.SetFloat("_WindBottomY", _grid.WindBottomY);
+            _cs.SetInt("_WindGridSizeX", _grid.Nx);
+            _cs.SetInt("_WindGridSizeY", _grid.Ny);
+            _cs.SetInt("_WindGridSizeZ", _grid.Nz);
+            _cs.SetFloat("_WindCellSize", _grid.CellSize);
+            _cs.SetFloat("_WindBottomY", _grid.BottomY);
+            _cs.SetFloat("_SmokeSourceScale", SmokeSourceScale);
+
+            // The Wind Nest: the parent, and the place of this grid on the footprint of the Wind Grid.
+            _cs.SetInt("_IsNest", Parent != null ? 1 : 0);
+            if (Parent != null)
+            {
+                WindDomain parent = Parent._grid;
+                Vector3 parentExtent = parent.Extent;
+                _cs.SetVector("_FootprintTransform", new Vector4(
+                    _grid.Nx * _grid.CellSize / parentExtent.x, _grid.Nz * _grid.CellSize / parentExtent.z,
+                    _grid.OriginXZ.x / parentExtent.x, _grid.OriginXZ.y / parentExtent.z));
+                _cs.SetVector("_ParentOffset", new Vector4(_grid.OriginXZ.x - parent.OriginXZ.x, _grid.BottomY - parent.BottomY, _grid.OriginXZ.y - parent.OriginXZ.y, 0f));
+                _cs.SetVector("_ParentExtent", parentExtent);
+                _cs.SetFloat("_ParentCellSize", parent.CellSize);
+            }
+            else
+            {
+                _cs.SetVector("_FootprintTransform", new Vector4(1f, 1f, 0f, 0f));
+                _cs.SetVector("_ParentOffset", Vector4.zero);
+                _cs.SetVector("_ParentExtent", _grid.Extent);
+                _cs.SetFloat("_ParentCellSize", _grid.CellSize);
+            }
+            bool nest = Nest != null && Nest.Active;
+            _cs.SetInt("_NestActive", nest ? 1 : 0);
+            if (nest)
+            {
+                WindDomain box = Nest.Domain;
+                _cs.SetVector("_NestBox", new Vector4(box.OriginXZ.x, box.OriginXZ.y, box.Nx * box.CellSize, box.Nz * box.CellSize));
+                _cs.SetFloat("_NestRampM", Nest.RampM);
+            }
             _cs.SetFloat("_DtWind", DtWind);
             _cs.SetFloat("_Gravity", Gravity);
             _cs.SetFloat("_Theta0", Theta0);
@@ -148,6 +196,14 @@ namespace FireCA
             _cs.SetTexture(kernel, "_GroundHeight", _registry.Get(SimTextures.GroundHeight));
         }
 
+        // The textures of the parent. The Wind Grid has no parent and binds its own textures, which no kernel then reads.
+        void BindParent(int kernel)
+        {
+            IWindTextures source = Parent != null ? Parent._registry : _registry;
+            _cs.SetTexture(kernel, "_ParentVelocity", source.Get(SimTextures.Velocity));
+            _cs.SetTexture(kernel, "_ParentSmoke", source.Get(SimTextures.Smoke));
+        }
+
         /// <summary>
         /// Builds the cell flags, fills the velocity with background(h), and clears theta, the smoke, and the pressure.
         /// The spin-up runs after this call: SpinUp runs every step at once, and the Step Scheduler runs a few steps per frame.
@@ -163,6 +219,7 @@ namespace FireCA
             for (int pass = 0; pass < 2; pass++)
             {
                 BindCommon(_init);
+                BindParent(_init);
                 _cs.SetTexture(_init, "_VelocityOut", pass == 0 ? Velocity : VelocityWrite);
                 _cs.SetTexture(_init, "_SmokeOut", pass == 0 ? _registry.Get(SimTextures.Smoke) : _registry.GetWrite(SimTextures.Smoke));
                 _cs.SetTexture(_init, "_Pressure", _registry.Get(SimTextures.Pressure));
@@ -195,6 +252,7 @@ namespace FireCA
             RunStep();
             WindTime += DtWind;
             StepCount++;
+            if (Nest != null && Nest.Active) Nest.StepAfterParent();
         }
 
         /// <summary>Sets the wind time. The Step Scheduler calls this when the Sim Clock restarts.</summary>
@@ -215,6 +273,7 @@ namespace FireCA
         {
             // 1. Advect: read copy to write copy.
             BindCommon(_advect);
+            BindParent(_advect);
             _cs.SetTexture(_advect, "_VelocityRead", Velocity);
             _cs.SetTexture(_advect, "_VelocityOut", VelocityWrite);
             _cs.SetTexture(_advect, "_SmokeRead", _registry.Get(SimTextures.Smoke));
@@ -227,6 +286,7 @@ namespace FireCA
                 // 1b. Correct: the read copies and the write copies to the scratch textures. The scratch textures
                 // then become the read copies.
                 BindCommon(_correct);
+                BindParent(_correct);
                 _cs.SetTexture(_correct, "_VelocityRead", Velocity);
                 _cs.SetTexture(_correct, "_VelocityHat", VelocityWrite);
                 _cs.SetTexture(_correct, "_SmokeRead", _registry.Get(SimTextures.Smoke));
@@ -246,6 +306,7 @@ namespace FireCA
 
             // 2 to 6. Stratify, buoyancy, vorticity confinement, ground sources, sponge, solid.
             BindCommon(_forces);
+            BindParent(_forces);
             _cs.SetTexture(_forces, "_TurbulenceRead", _registry.Get(SimTextures.Turbulence));
             _cs.SetTexture(_forces, "_VelocityRead", Velocity);
             _cs.SetTexture(_forces, "_VelocityOut", VelocityWrite);
@@ -293,7 +354,8 @@ namespace FireCA
             BindCommon(_surfaceWind);
             _cs.SetTexture(_surfaceWind, "_VelocityRead", Velocity);
             _cs.SetTexture(_surfaceWind, "_SurfaceWindOut", _registry.Get(SimTextures.SurfaceWind));
-            _cs.Dispatch(_surfaceWind, (_grid.WindCellsX + 7) / 8, (_grid.WindCellsZ + 7) / 8, 1);
+            _cs.SetTexture(_surfaceWind, "_NestSurfaceWind", Nest != null && Nest.Active ? Nest.SurfaceWind : Texture2D.blackTexture);
+            _cs.Dispatch(_surfaceWind, (_grid.Nx + 7) / 8, (_grid.Nz + 7) / 8, 1);
         }
 
         /// <summary>Step 11. Writes the Turbulence texture from the read copy of Velocity.</summary>
@@ -314,7 +376,7 @@ namespace FireCA
             _cs.SetTexture(_stats, "_VelocityRead", Velocity);
             _cs.SetTexture(_stats, "_SmokeRead", _registry.Get(SimTextures.Smoke));
             _cs.SetBuffer(_stats, "_StatsOut", _statsBuffer);
-            _cs.Dispatch(_stats, (_grid.WindCellsX + 7) / 8, (_grid.WindCellsZ + 7) / 8, 1);
+            _cs.Dispatch(_stats, (_grid.Nx + 7) / 8, (_grid.Nz + 7) / 8, 1);
             var request = AsyncGPUReadback.Request(_statsBuffer);
             request.WaitForCompletion();
             var stats = new WindStats();

@@ -35,6 +35,8 @@ namespace FireCA
         FireCAApp _app;
         Camera _camera;
         Vector3 _target;
+        /// <summary>The point that the camera looks at and orbits.</summary>
+        public Vector3 Target => _target;
         float _yawDeg, _pitchDeg = 35f, _distance = 3000f;
         float _flySpeed = 250f;
         bool _dragging;

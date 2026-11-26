@@ -10,6 +10,7 @@
 int _FireGridSize;        // Fire Grid cells per side
 float _FireCellSize;      // m
 int _BlockSize;           // Fire Grid cells per Wind Grid column, on X and on Z
+int2 _BlockOrigin;        // the Fire Grid cell at the corner of column (0, 0). (0, 0) for the Wind Grid
 int _WindGridSizeX;
 int _WindGridSizeY;
 int _WindGridSizeZ;
@@ -54,13 +55,14 @@ void NormalKernel(uint3 id : SV_DispatchThreadID)
 void GroundHeightKernel(uint3 id : SV_DispatchThreadID)
 {
     if ((int)id.x >= _WindGridSizeX || (int)id.y >= _WindGridSizeZ) return;
-    int2 origin = int2(id.xy) * _BlockSize;
+    int2 origin = _BlockOrigin + int2(id.xy) * _BlockSize;
+    int2 last = int2(_FireGridSize - 1, _FireGridSize - 1);
     float sum = 0.0;
     for (int j = 0; j < _BlockSize; j++)
     {
         for (int i = 0; i < _BlockSize; i++)
         {
-            sum += _Elevation[origin + int2(i, j)];
+            sum += _Elevation[clamp(origin + int2(i, j), int2(0, 0), last)];
         }
     }
     _GroundHeightOut[id.xy] = sum / (float)(_BlockSize * _BlockSize);

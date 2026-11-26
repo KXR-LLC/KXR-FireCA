@@ -174,8 +174,39 @@ namespace FireCA
         /// Binds the wind textures to the terrain shader and the slice plane shader. The read copies of Velocity and
         /// Smoke change after each Wind step, so the app calls this in each frame.
         /// </summary>
-        public void BindWind(TextureRegistry registry)
+        static readonly int NestVelocityId = Shader.PropertyToID("_FireCA_NestVelocity");
+        static readonly int NestSmokeId = Shader.PropertyToID("_FireCA_NestSmoke");
+        static readonly int NestTurbulenceId = Shader.PropertyToID("_FireCA_NestTurbulence");
+        static readonly int NestGridId = Shader.PropertyToID("_FireCA_NestGrid");
+        static readonly int NestOriginId = Shader.PropertyToID("_FireCA_NestOrigin");
+
+        /// <summary>
+        /// The Wind Nest of the display (docs/decisions.md, decision D32). _FireCA_NestGrid: cells on X, Y, Z, and the
+        /// cell size. _FireCA_NestOrigin: the world position of the corner of cell (0, 0, 0), and the width of the
+        /// blend zone at the faces. A cell size of 0 means that no Wind Nest is placed.
+        /// </summary>
+        void BindNest(TextureRegistry registry, WindNest nest)
         {
+            bool active = nest != null && nest.Active;
+            Shader.SetGlobalTexture(NestVelocityId, active ? nest.Velocity : registry.Get(SimTextures.Velocity));
+            Shader.SetGlobalTexture(NestSmokeId, active ? nest.Smoke : registry.Get(SimTextures.Smoke));
+            Shader.SetGlobalTexture(NestTurbulenceId, active ? nest.Turbulence : registry.Get(SimTextures.Turbulence));
+            if (active)
+            {
+                WindDomain d = nest.Domain;
+                Shader.SetGlobalVector(NestGridId, new Vector4(d.Nx, d.Ny, d.Nz, d.CellSize));
+                Shader.SetGlobalVector(NestOriginId, new Vector4(d.OriginXZ.x, d.BottomY, d.OriginXZ.y, nest.RampM));
+            }
+            else
+            {
+                Shader.SetGlobalVector(NestGridId, Vector4.zero);
+                Shader.SetGlobalVector(NestOriginId, Vector4.zero);
+            }
+        }
+
+        public void BindWind(TextureRegistry registry, WindNest nest = null)
+        {
+            BindNest(registry, nest);
             GridSpec grid = registry.Grid;
             Shader.SetGlobalTexture(SurfaceWindId, registry.Get(SimTextures.SurfaceWind));
             Shader.SetGlobalTexture(VelocityId, registry.Get(SimTextures.Velocity));

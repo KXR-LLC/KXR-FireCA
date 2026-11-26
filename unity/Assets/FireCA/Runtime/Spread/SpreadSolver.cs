@@ -277,9 +277,13 @@ namespace FireCA
             if (ActiveBlocks == 0) _hasIgnition = false;
         }
 
+        /// <summary>The center of the last ignition (world X, Z), or null when no ignition has run since the reset.</summary>
+        public Vector2? LastIgnitionXZ { get; private set; }
+
         /// <summary>Sets the Arrival Time of every burnable cell in the circle that is not ignited.</summary>
         public void Ignite(Vector2 centerXZ, float radiusM, double time)
         {
+            LastIgnitionXZ = centerXZ;
             float cell = GridSpec.FireCellSizeM;
             int reach = Mathf.CeilToInt(radiusM / cell) + 1;
             int ox = Mathf.FloorToInt(centerXZ.x / cell) - reach, oz = Mathf.FloorToInt(centerXZ.y / cell) - reach;

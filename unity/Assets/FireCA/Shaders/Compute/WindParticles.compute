@@ -31,6 +31,11 @@ float _WindBottomY;
 Texture3D<float4> _VelocityRead;
 Texture3D<float> _SolidMask;
 Texture3D<float4> _TurbulenceRead;  // w: turbulence speed, m/s
+// The Wind Nest (docs/decisions.md, decision D32). A cell size of 0 means that no Wind Nest is placed.
+Texture3D<float4> _NestVelocity;
+Texture3D<float4> _NestTurbulence;
+float4 _NestGrid;           // cells on X, Y, Z, and the cell size (m)
+float4 _NestOrigin;         // world position of the corner of cell (0, 0, 0), and the width of the blend zone (m)
 Texture2D<float> _GroundHeight;
 SamplerState fireca_linear_clamp_sampler;
 
@@ -47,6 +52,26 @@ float3 SampleVelocity(float3 p)
         _VelocityRead.SampleLevel(fireca_linear_clamp_sampler, (p + float3(h, 0.0, 0.0)) / e, 0).x,
         _VelocityRead.SampleLevel(fireca_linear_clamp_sampler, (p + float3(0.0, h, 0.0)) / e, 0).y,
         _VelocityRead.SampleLevel(fireca_linear_clamp_sampler, (p + float3(0.0, 0.0, h)) / e, 0).z);
+}
+
+// The share of the Wind Nest at a position in the Wind Nest: 0 outside the box and at its faces.
+float NestWeight(float3 q)
+{
+    if (_NestGrid.w <= 0.0) return 0.0;
+    float3 e = _NestGrid.xyz * _NestGrid.w;
+    float3 inside = min(q, e - q);
+    if (q.y < 0.0) return 0.0;
+    return saturate(min(min(inside.x, inside.z), e.y - q.y) / max(_NestOrigin.w, 1.0));
+}
+
+float3 SampleNestVelocity(float3 q)
+{
+    float3 e = _NestGrid.xyz * _NestGrid.w;
+    float h = 0.5 * _NestGrid.w;
+    return float3(
+        _NestVelocity.SampleLevel(fireca_linear_clamp_sampler, (q + float3(h, 0.0, 0.0)) / e, 0).x,
+        _NestVelocity.SampleLevel(fireca_linear_clamp_sampler, (q + float3(0.0, h, 0.0)) / e, 0).y,
+        _NestVelocity.SampleLevel(fireca_linear_clamp_sampler, (q + float3(0.0, 0.0, h)) / e, 0).z);
 }
 
 uint Hash(uint x)
@@ -98,10 +123,16 @@ void UpdateKernel(uint3 id : SV_DispatchThreadID)
     }
 
     float3 velocity = SampleVelocity(local);
+    float3 nestLocal = position - _NestOrigin.xyz;
+    float nestWeight = NestWeight(nestLocal);
+    if (nestWeight > 0.0)
+        velocity = lerp(velocity, SampleNestVelocity(nestLocal), nestWeight);
     // The eddies that are too small for the Wind Grid (docs/decisions.md, decision D31).
     if (_TurbulenceGain > 0.0)
     {
         float speed = _TurbulenceRead.SampleLevel(fireca_linear_clamp_sampler, local / extent, 0).w;
+        if (nestWeight > 0.0)
+            speed = lerp(speed, _NestTurbulence.SampleLevel(fireca_linear_clamp_sampler, nestLocal / (_NestGrid.xyz * _NestGrid.w), 0).w, nestWeight);
         velocity += _TurbulenceGain * speed * FireCA_TurbulenceField(position, _TurbulenceTime);
     }
     position += velocity * _SpeedScale * _DeltaTime;

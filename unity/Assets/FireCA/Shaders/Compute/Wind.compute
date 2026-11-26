@@ -6,6 +6,9 @@
 //   z: wind Z on the south face of the cell,   at ((i + 0.5) h, (j + 0.5) h, (k) h)
 //   w: theta at the cell center, K above the background air at the same height
 // Positions are relative to the Wind Grid origin (0, _WindBottomY, 0). Every grid size comes from a uniform.
+//
+// The same kernels run the Wind Nest (docs/decisions.md, decision D32). For the Wind Nest, "the Wind Grid" in a
+// comment below means the grid of the Wind Nest, and the parent is the Wind Grid.
 
 #pragma kernel InitKernel
 #pragma kernel FlagsKernel
@@ -48,6 +51,18 @@ float _SampleHeightM;
 float _StabilityKPerM;
 float _AdvectionSharpness;      // 0: semi-Lagrangian advection. 1: the full MacCormack correction (decision D31)
 float _VorticityConfinement;    // the confinement factor, no unit. 0 turns the force off
+
+// The Wind Nest (decision D32). For the Wind Grid, _IsNest is 0 and the footprint transform is (1, 1, 0, 0).
+int _IsNest;
+float4 _FootprintTransform;     // xy: scale, zw: offset. Turns a uv of this grid into a uv of the Wind Grid footprint
+float _SmokeSourceScale;        // Wind Grid cell size over the cell size of this grid
+float3 _ParentOffset;           // the origin of this grid, relative to the origin of the parent, m
+float3 _ParentExtent;           // the extent of the parent, m
+float _ParentCellSize;          // m
+// The Surface Wind kernel of the Wind Grid takes the Surface Wind of the Wind Nest inside the box of the Wind Nest.
+int _NestActive;
+float4 _NestBox;                // xy: origin of the Wind Nest (world X, Z), zw: extent on X and Z, m
+float _NestRampM;               // the width of the zone where the two Surface Wind values blend, m
 float2 _BackgroundWind;     // background wind at 6.1 m, m/s (X, Z), pointing where the wind goes
 int _Parity;                // 0: red cells, 1: black cells
 
@@ -56,6 +71,9 @@ Texture3D<float> _SmokeRead;
 Texture3D<float4> _VelocityHat;     // the result of the advect kernel, for the correct kernel
 Texture3D<float> _SmokeHat;
 Texture3D<float4> _TurbulenceRead;  // xyz: vorticity at the cell center, 1/s. w: turbulence speed, m/s
+Texture3D<float4> _ParentVelocity;
+Texture3D<float> _ParentSmoke;
+Texture2D<float2> _NestSurfaceWind;
 Texture3D<float> _SolidMask;
 Texture3D<float> _FlagsRead;
 Texture3D<float> _DivergenceRead;
@@ -128,6 +146,35 @@ float2 BackgroundAt(float3 p)
     return _BackgroundWind * Profile(h);
 }
 
+// The uv of the Wind Grid footprint (Surface Heating, Heat Flux Coarse) for a uv of this grid.
+float2 FootprintUv(float2 uv) { return uv * _FootprintTransform.xy + _FootprintTransform.zw; }
+
+// The velocity and theta of the parent at a position of this grid. The parent is staggered too.
+float4 ParentAt(float3 p)
+{
+    float3 pp = p + _ParentOffset;
+    float h = 0.5 * _ParentCellSize;
+    return float4(
+        _ParentVelocity.SampleLevel(fireca_linear_clamp_sampler, (pp + float3(h, 0.0, 0.0)) / _ParentExtent, 0).x,
+        _ParentVelocity.SampleLevel(fireca_linear_clamp_sampler, (pp + float3(0.0, h, 0.0)) / _ParentExtent, 0).y,
+        _ParentVelocity.SampleLevel(fireca_linear_clamp_sampler, (pp + float3(0.0, 0.0, h)) / _ParentExtent, 0).z,
+        _ParentVelocity.SampleLevel(fireca_linear_clamp_sampler, pp / _ParentExtent, 0).w);
+}
+
+float ParentSmokeAt(float3 p)
+{
+    return _ParentSmoke.SampleLevel(fireca_linear_clamp_sampler, (p + _ParentOffset) / _ParentExtent, 0);
+}
+
+// The weight of the relaxation zones for one step: 0 inside, dtWind / spongeTimeS at the outer face.
+float SpongeWeight(int3 c)
+{
+    float3 cells = float3(_WindGridSizeX, _WindGridSizeY, _WindGridSizeZ);
+    float lateral = min(min(c.x + 0.5, cells.x - c.x - 0.5), min(c.z + 0.5, cells.z - c.z - 0.5));
+    float top = cells.y - c.y - 0.5;
+    return saturate(max(saturate(1.0 - lateral / _SpongeCells), saturate(1.0 - top / _SpongeTopCells)) * _DtWind / _SpongeTimeS);
+}
+
 // Trilinear samples of the staggered components at a position (relative to the Wind Grid origin).
 float SampleU(float3 p) { return _VelocityRead.SampleLevel(fireca_linear_clamp_sampler, (p + float3(0.5 * _WindCellSize, 0.0, 0.0)) / GridExtent(), 0).x; }
 float SampleV(float3 p) { return _VelocityRead.SampleLevel(fireca_linear_clamp_sampler, (p + float3(0.0, 0.5 * _WindCellSize, 0.0)) / GridExtent(), 0).y; }
@@ -152,6 +199,20 @@ void InitKernel(uint3 id : SV_DispatchThreadID)
     if (!InGrid(c)) return;
     float3 pc = CellCenter(c);
     float half = 0.5 * _WindCellSize;
+    if (_IsNest != 0)
+    {
+        // The Wind Nest starts from the state of the Wind Grid.
+        float3 start = float3(
+            ParentAt(pc - float3(half, 0.0, 0.0)).x, ParentAt(pc - float3(0.0, half, 0.0)).y, ParentAt(pc - float3(0.0, 0.0, half)).z);
+        if (FaceBlockedX(c)) start.x = 0.0;
+        if (FaceBlockedY(c)) start.y = 0.0;
+        if (FaceBlockedZ(c)) start.z = 0.0;
+        bool rock = IsSolid(c);
+        _VelocityOut[c] = float4(start, rock ? 0.0 : ParentAt(pc).w);
+        _SmokeOut[c] = rock ? 0.0 : ParentSmokeAt(pc);
+        _Pressure[c] = 0.0;
+        return;
+    }
     float u = FaceBlockedX(c) ? 0.0 : BackgroundAt(pc - float3(half, 0.0, 0.0)).x;
     float w = FaceBlockedZ(c) ? 0.0 : BackgroundAt(pc - float3(0.0, 0.0, half)).y;
     _VelocityOut[c] = float4(u, 0.0, w, 0.0);
@@ -198,8 +259,9 @@ float WindyWeight(float speed)
 
 float AloftWeight(float3 p)
 {
+    // In cells: 0 up to 2.5 cells above the ground and 1 from 6.5 cells.
     float h = p.y + _WindBottomY - GroundHeightAt(p.xz);
-    return saturate((h - 80.0) / 128.0);
+    return saturate((h - 2.5 * _WindCellSize) / (4.0 * _WindCellSize));
 }
 
 // Smoke source: the ground cell receives the smoke of the fire under the column.
@@ -207,7 +269,13 @@ float SmokeDecayAndSource(int3 c, float smoke)
 {
     smoke *= exp(-_DtWind / _SmokeLifeS);
     if (IsGround(c))
-        smoke += _SmokeRate * _HeatFluxCoarse[c.xz] * _DtWind;
+    {
+        float2 uv = FootprintUv((float2(c.xz) + 0.5) / float2(_WindGridSizeX, _WindGridSizeZ));
+        smoke += _SmokeSourceScale * _SmokeRate * _HeatFluxCoarse.SampleLevel(fireca_linear_clamp_sampler, uv, 0) * _DtWind;
+    }
+    // The smoke of the Wind Grid enters the Wind Nest through the relaxation zones.
+    if (_IsNest != 0)
+        smoke = lerp(smoke, ParentSmokeAt(CellCenter(c)), SpongeWeight(c));
     return smoke;
 }
 
@@ -389,7 +457,7 @@ void ForcesKernel(uint3 id : SV_DispatchThreadID)
     // 4. Ground sources. The heat goes to the ground cell. The drag acts on every face of a ground cell.
     if (IsGround(c))
     {
-        float2 uv = (float2(c.xz) + 0.5) / float2(_WindGridSizeX, _WindGridSizeZ);
+        float2 uv = FootprintUv((float2(c.xz) + 0.5) / float2(_WindGridSizeX, _WindGridSizeZ));
         float heat = _HeatingGain * _SurfaceHeating.SampleLevel(fireca_linear_clamp_sampler, uv, 0)
             + _CouplingGain * _FireConvFraction * 1000.0 * _HeatFluxCoarse.SampleLevel(fireca_linear_clamp_sampler, uv, 0);
         theta += heat * _DtWind / (_RhoCp * _WindCellSize);
@@ -402,17 +470,21 @@ void ForcesKernel(uint3 id : SV_DispatchThreadID)
     if (ground || IsGround(c - int3(0, 0, 1))) vel.z *= drag;
 
     // 5. Sponge: blend toward background(h) in the lateral zones and the top zone.
-    float3 cells = float3(GridSize());
-    float lateral = min(min(c.x + 0.5, cells.x - c.x - 0.5), min(c.z + 0.5, cells.z - c.z - 0.5));
-    float top = cells.y - c.y - 0.5;
-    float weight = max(saturate(1.0 - lateral / _SpongeCells), saturate(1.0 - top / _SpongeTopCells)) * _DtWind / _SpongeTimeS;
+    // The Wind Nest blends toward the Wind Grid in place of background(h).
+    float weight = SpongeWeight(c);
     if (weight > 0.0)
     {
         float3 pc = CellCenter(c);
         float half = 0.5 * _WindCellSize;
         float3 target = float3(BackgroundAt(pc - float3(half, 0.0, 0.0)).x, 0.0, BackgroundAt(pc - float3(0.0, 0.0, half)).y);
-        vel = lerp(vel, target, saturate(weight));
-        theta = lerp(theta, 0.0, saturate(weight));
+        float thetaTarget = 0.0;
+        if (_IsNest != 0)
+        {
+            target = float3(ParentAt(pc - float3(half, 0.0, 0.0)).x, ParentAt(pc - float3(0.0, half, 0.0)).y, ParentAt(pc - float3(0.0, 0.0, half)).z);
+            thetaTarget = ParentAt(pc).w;
+        }
+        vel = lerp(vel, target, weight);
+        theta = lerp(theta, thetaTarget, weight);
     }
 
     // 6. Solid: no flow through a blocked face.
@@ -514,7 +586,27 @@ void SurfaceWindKernel(uint3 id : SV_DispatchThreadID)
 
     float3 vt = v - n * dot(v, n);
     float scale = log((6.1 + _Z0) / _Z0) / log((_SampleHeightM + _Z0) / _Z0);
-    _SurfaceWindOut[column] = vt.xz * scale;
+    float2 surface = vt.xz * scale;
+
+    // Inside the box of the Wind Nest, the Surface Wind is the Surface Wind of the Wind Nest: the mean of 9 points
+    // over the column. The two values blend over a ramp at the faces of the box.
+    if (_NestActive != 0)
+    {
+        float2 local = centerXZ - _NestBox.xy;
+        float2 inside = min(local, _NestBox.zw - local);
+        float w = saturate((min(inside.x, inside.y) - _NestRampM) / _NestRampM);
+        if (w > 0.0)
+        {
+            float2 sum = float2(0.0, 0.0);
+            for (int t = 0; t < 9; t++)
+            {
+                float2 offset = (float2(t % 3, t / 3) - 1.0) * (_WindCellSize / 3.0);
+                sum += _NestSurfaceWind.SampleLevel(fireca_linear_clamp_sampler, (local + offset) / _NestBox.zw, 0);
+            }
+            surface = lerp(surface, sum / 9.0, w);
+        }
+    }
+    _SurfaceWindOut[column] = surface;
 }
 
 // ---- step 11: Turbulence (docs/decisions.md, decision D31) ----
@@ -564,7 +656,8 @@ void TurbulenceKernel(uint3 id : SV_DispatchThreadID)
     float3 pc = CellCenter(c);
     float z = max(pc.y + _WindBottomY - GroundHeightAt(pc.xz), 4.0);
     float friction = 0.4 * length(vc) / log((z + _Z0) / _Z0);
-    float surface = 2.2 * friction * saturate(1.0 - z / 600.0);
+    // A grid with smaller cells holds more of the eddies of the ground, so the part falls with the cell size.
+    float surface = 2.2 * friction * saturate(1.0 - z / 600.0) * saturate(_WindCellSize / 32.0);
 
     float heat = 0.6 * sqrt(_Gravity / _Theta0 * max(_VelocityRead[c].w, 0.0) * _WindCellSize);
 

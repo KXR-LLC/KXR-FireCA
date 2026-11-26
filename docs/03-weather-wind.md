@@ -187,6 +187,10 @@ The requirements below apply to the Wind step.
 7. The Wind Solver must produce no NaN value and no infinite value.
 8. On Scenario load, the Wind Solver must fill the velocity with `background(h)`, then run `spinUpSteps` Wind steps before the Sim Clock starts.
 
+### Wind Nest
+
+The Wind Nest is a second grid of the Wind Solver with smaller cells, over a box inside the Wind Grid. The same kernels run both grids. Decision D32 in `decisions.md` gives the size, the place, the coupling to the Wind Grid, and the limits. Milestone M7 in `05-milestones.md` gives the acceptance criteria.
+
 ### Surface Wind
 
 ```text

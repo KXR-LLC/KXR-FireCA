@@ -20,6 +20,7 @@ namespace FireCA
             cs.SetInt(FireGridSize, grid.FireCells);
             cs.SetFloat(FireCellSize, GridSpec.FireCellSizeM);
             cs.SetInt(BlockSize, GridSpec.BlockSize);
+            cs.SetInts("_BlockOrigin", 0, 0);
             cs.SetInt(WindGridSizeX, grid.WindCellsX);
             cs.SetInt(WindGridSizeY, GridSpec.WindCellsY);
             cs.SetInt(WindGridSizeZ, grid.WindCellsZ);
@@ -53,6 +54,35 @@ namespace FireCA
             cs.SetTexture(k, "_GroundHeightIn", groundHeight);
             cs.SetTexture(k, "_SolidMaskOut", solidMask);
             cs.Dispatch(k, Groups(grid.WindCellsX, 4), Groups(GridSpec.WindCellsY, 4), Groups(grid.WindCellsZ, 4));
+        }
+
+        /// <summary>
+        /// Writes the Ground Height and the Solid Mask of a grid with its own cell size and its own origin, for the
+        /// Wind Nest (docs/decisions.md, decision D32). The cell size must be a multiple of the Fire Grid cell size.
+        /// </summary>
+        public static void RunForGrid(ComputeShader cs, Texture elevation, int fireCells, in WindDomain domain,
+            Texture groundHeight, Texture solidMask)
+        {
+            int block = Mathf.RoundToInt(domain.CellSize / GridSpec.FireCellSizeM);
+            cs.SetInt(FireGridSize, fireCells);
+            cs.SetFloat(FireCellSize, GridSpec.FireCellSizeM);
+            cs.SetInt(BlockSize, block);
+            cs.SetInts("_BlockOrigin", Mathf.RoundToInt(domain.OriginXZ.x / GridSpec.FireCellSizeM), Mathf.RoundToInt(domain.OriginXZ.y / GridSpec.FireCellSizeM));
+            cs.SetInt(WindGridSizeX, domain.Nx);
+            cs.SetInt(WindGridSizeY, domain.Ny);
+            cs.SetInt(WindGridSizeZ, domain.Nz);
+            cs.SetFloat(WindCellSize, domain.CellSize);
+            cs.SetFloat(WindBottomY, domain.BottomY);
+
+            int k = cs.FindKernel("GroundHeightKernel");
+            cs.SetTexture(k, "_Elevation", elevation);
+            cs.SetTexture(k, "_GroundHeightOut", groundHeight);
+            cs.Dispatch(k, Groups(domain.Nx, 8), Groups(domain.Nz, 8), 1);
+
+            k = cs.FindKernel("SolidMaskKernel");
+            cs.SetTexture(k, "_GroundHeightIn", groundHeight);
+            cs.SetTexture(k, "_SolidMaskOut", solidMask);
+            cs.Dispatch(k, Groups(domain.Nx, 4), Groups(domain.Ny, 4), Groups(domain.Nz, 4));
         }
 
         static int Groups(int cells, int threads) => (cells + threads - 1) / threads;

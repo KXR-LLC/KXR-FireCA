@@ -72,6 +72,7 @@ The Smoke Pass is an HDRP Custom Pass at the Before Post Process injection point
 7. Blend the result over the camera color.
 8. Provide a density multiplier and an on-off toggle in the Control Panel.
 9. Move the sample point of step 3 with the turbulence of decision D31 in `decisions.md`.
+10. Inside the box of the Wind Nest, read the smoke of the Wind Nest, and give that part of the ray 96 steps of its own (decision D32).
 
 The Smoke Pass can render at half resolution with a depth-aware upsample if the full-resolution cost is above 3 ms.
 
@@ -81,7 +82,7 @@ Wind Particles are a VFX Graph effect that samples the Velocity texture of the W
 
 1. Spawn particles at random positions over the Fire Grid area.
 2. Spawn each particle at a height above the ground between 10 m and 400 m, with more particles near the ground.
-3. Move each particle with the Velocity sample at the position of the particle. Add the turbulence of decision D31 in `decisions.md`.
+3. Move each particle with the Velocity sample at the position of the particle. Add the turbulence of decision D31 in `decisions.md`. Inside the box of the Wind Nest, use the Velocity of the Wind Nest (decision D32).
 4. Multiply the particle motion by `particleSpeedScale`, with a default of 30. The Sim Clock time scale must not change the particle speed.
 5. Draw each particle as a streak along the velocity of the particle.
 6. Color each particle by wind speed with the Surface wind Overlay color map.

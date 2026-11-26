@@ -96,6 +96,32 @@ namespace FireCA
         }
         float _vorticityConfinement = WindSolver.DefaultVorticityConfinement;
 
+        /// <summary>The Wind Nest of the loaded Scenario (docs/decisions.md, decision D32). Not placed until a fire starts or the user places it.</summary>
+        public WindNest Nest { get; private set; }
+
+        /// <summary>When false, the app does not place the Wind Nest, and a placed Wind Nest is removed.</summary>
+        public bool WindNestEnabled
+        {
+            get => _windNestEnabled;
+            set { _windNestEnabled = value; if (!value && Nest != null && Nest.Active) Nest.Remove(); }
+        }
+        bool _windNestEnabled = true;
+
+        /// <summary>The cell size of the Wind Nest, m. A change takes effect at the next placement.</summary>
+        public float WindNestCellSizeM { get => _windNestCellSizeM; set => _windNestCellSizeM = WindNest.SnapCellSize(value); }
+        float _windNestCellSizeM = WindNest.DefaultCellSizeM;
+
+        /// <summary>
+        /// Places the Wind Nest around a center (world X, Z), or moves it there. Returns false when the Wind Nest is
+        /// off or the Wind Solver has not finished the spin-up.
+        /// </summary>
+        public bool PlaceWindNest(Vector2 centerXZ)
+        {
+            if (!WindNestEnabled || Nest == null || Wind == null || !Wind.Enabled || !Wind.SpunUp) return false;
+            Nest.Place(centerXZ, _windNestCellSizeM);
+            return true;
+        }
+
         public float CouplingGain
         {
             get => _couplingGain;
@@ -142,6 +168,7 @@ namespace FireCA
         void OnDestroy()
         {
             Spread?.Dispose();
+            Nest?.Dispose();
             Wind?.Dispose();
             Terrain.Clear();
             Registry.Dispose();
@@ -156,10 +183,13 @@ namespace FireCA
             {
                 Scheduler.Tick(Time.unscaledDeltaTime);
                 UpdateIgniteTool();
+                // The Wind Nest goes around the first ignition. The user moves it from the Control Panel.
+                if (WindNestEnabled && Nest != null && !Nest.Active && Spread.LastIgnitionXZ.HasValue)
+                    PlaceWindNest(Spread.LastIgnitionXZ.Value);
             }
             Overlays.BindFire(Registry, (float)Clock.Seconds, Spread.SourceHoldS);
             Overlays.BindWeather(Registry, Weather);
-            Overlays.BindWind(Registry);
+            Overlays.BindWind(Registry, Nest);
         }
 
         void UpdateIgniteTool()
@@ -222,6 +252,8 @@ namespace FireCA
             watch ??= Stopwatch.StartNew();
             Spread?.Dispose();
             Spread = null;
+            Nest?.Dispose();
+            Nest = null;
             Wind?.Dispose();
             Wind = null;
 
@@ -245,7 +277,12 @@ namespace FireCA
             Weather.Initialize(files);
             // The Wind Solver fills the velocity with the background wind. The spin-up runs in the Step Scheduler.
             Wind = new WindSolver(windCompute, Registry, Weather, files.Data) { Enabled = WindSolverEnabled, CouplingGain = _couplingGain, AdvectionSharpness = _advectionSharpness, VorticityConfinement = _vorticityConfinement };
-            if (Wind.Enabled) Wind.Initialize();
+            if (Wind.Enabled)
+            {
+                Wind.Initialize();
+                Nest = new WindNest(windCompute, derivedLayersCompute, Registry, Weather, files, Wind);
+                Wind.Nest = Nest;
+            }
             Spread = new SpreadSolver(spreadCompute, Registry, Weather);
             Spread.Reset();
             Scheduler = new StepScheduler(Clock, Weather, Wind, Spread, files.Data, files.Grid);
@@ -261,7 +298,7 @@ namespace FireCA
             Overlays.SetGroundImage(LoadGroundImage(files));
             Overlays.BindFire(Registry, 0f, Spread.SourceHoldS);
             Overlays.BindWeather(Registry, Weather);
-            Overlays.BindWind(Registry);
+            Overlays.BindWind(Registry, Nest);
 
             watch.Stop();
             LastLoadSeconds = (float)watch.Elapsed.TotalSeconds;

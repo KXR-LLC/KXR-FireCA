@@ -176,3 +176,30 @@ Acceptance criteria:
 2. The fire, weather, and wind systems run on the Scenario with no code change.
 
 **Note:** LANDFIRE fuel data has a 30 m cell. The fuel layer of a real canyon looks blocky at the 2 m Fire Grid cell size.
+
+## M7: Wind Nest
+
+The Wind Nest gives the Wind Solver smaller cells where the fire is. Decision D32 in `decisions.md` holds the design.
+
+Build:
+
+1. Make the Wind Solver run on a grid with any origin, any cell size, and any cell counts.
+2. Add the Wind Nest: a grid of at most 192 x 128 x 192 cells with a cell size of 8 m, 12 m, or 16 m. The default is 12 m.
+3. Write the Ground Height and the Solid Mask of the Wind Nest from Elevation.
+4. Start the Wind Nest from the state of the Wind Grid. In the relaxation zones, blend the velocity, `theta`, and the smoke toward the Wind Grid.
+5. Run 2 steps of the Wind Nest after each Wind step, each with half of `dtWind`.
+6. Inside the box, write the Surface Wind from the Wind Nest.
+7. Inside the box, draw the smoke and move the Wind Particles with the Wind Nest.
+8. Place the Wind Nest around the first ignition. Add a toggle, a cell size slider, and a move button to the Control Panel.
+
+Acceptance criteria:
+
+1. Over flat terrain with no heat, the Surface Wind of the Wind Nest stays within 20 percent of the background speed and within 5 degrees of the background direction after 300 steps of the Wind Nest.
+2. The mean absolute divergence of the Wind Nest after the project kernel is under 0.0003 1/s and under the value before the pressure kernel.
+3. On `south-canyon`, the mean vorticity under 150 m above the ground is at least 1.4 times higher in the Wind Nest than in the Wind Grid over the same area.
+4. A fire run of 2 simulated hours on `south-canyon` with the Wind Nest holds no NaN value, keeps `theta` in the clamp range, and keeps the peak wind speed under 100 m/s.
+5. Inside the box, the mean Surface Wind of the Wind Grid matches the mean Surface Wind of the Wind Nest within 0.25 m/s.
+6. The Stats HUD reports the texture memory with the Wind Nest. The Wind Nest uses 200 MB to 450 MB.
+7. With the Wind Nest off, every acceptance test of M1 to M6 passes with no change.
+
+The performance targets of M5 are for the Wind Grid alone. The Wind Nest should add no more than 3 times the cost of one Wind step.

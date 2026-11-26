@@ -91,6 +91,12 @@ namespace FireCA
             cs.SetFloat("_TurbulenceGain", _app.TurbulenceGain);
             cs.SetFloat("_TurbulenceTime", Time.unscaledTime);
             cs.SetTexture(_kernel, "_TurbulenceRead", registry.Get(SimTextures.Turbulence));
+            WindNest nest = _app.Nest;
+            bool nested = nest != null && nest.Active;
+            cs.SetTexture(_kernel, "_NestVelocity", nested ? nest.Velocity : registry.Get(SimTextures.Velocity));
+            cs.SetTexture(_kernel, "_NestTurbulence", nested ? nest.Turbulence : registry.Get(SimTextures.Turbulence));
+            cs.SetVector("_NestGrid", nested ? new Vector4(nest.Domain.Nx, nest.Domain.Ny, nest.Domain.Nz, nest.Domain.CellSize) : Vector4.zero);
+            cs.SetVector("_NestOrigin", nested ? new Vector4(nest.Domain.OriginXZ.x, nest.Domain.BottomY, nest.Domain.OriginXZ.y, nest.RampM) : Vector4.zero);
             cs.SetInt("_WindGridSizeX", grid.WindCellsX);
             cs.SetInt("_WindGridSizeY", GridSpec.WindCellsY);
             cs.SetInt("_WindGridSizeZ", grid.WindCellsZ);

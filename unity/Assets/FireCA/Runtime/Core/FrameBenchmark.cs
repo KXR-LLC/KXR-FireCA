@@ -73,6 +73,8 @@ namespace FireCA
             _json.Append("  ],\n");
 
             // Burn to a state with fire in the chute, smoke, and many active blocks.
+            // The benchmark measures the Wind Grid alone, as in M5. The Wind Nest stays off (decision D32).
+            _app.WindNestEnabled = false;
             _app.CouplingGain = 1f;
             _app.Clock.SetTimeScale(240f);
             _app.Clock.Playing = true;

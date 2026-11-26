@@ -29,6 +29,7 @@ Each term has one meaning in the project. Use each term exactly as written.
 | Weather Model | The system that computes air temperature, relative humidity, sunlight, and fuel moisture. |
 | Wind Solver | The compute shader system that advances the 3D wind field on the Wind Grid. |
 | Surface Wind | The 256 x 256 texture that holds the horizontal wind at 6.1 m above the ground. |
+| Wind Nest | The second grid of the Wind Solver, with cells of 8 m to 16 m, over a box around the fire. The Wind Grid feeds the Wind Nest at the faces of the box. |
 | Turbulence | The Wind Grid texture that holds the vorticity and the turbulence speed of each cell. The turbulence speed is an estimate of the speed of the eddies that are too small for the Wind Grid. |
 | Sim Clock | The simulation time, in seconds from the start of the Scenario. |
 | Step Scheduler | The CPU component that decides how many solver steps run in each frame. |

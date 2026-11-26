@@ -14,7 +14,7 @@ namespace FireCA
         const string NotBuilt = "--";
 
         FireCAApp _app;
-        Label _fireGrid, _windGrid, _activeBlocks, _burnedArea, _fireSteps, _windSteps, _cellUpdates, _timeScale, _frame, _memory;
+        Label _windNest, _fireGrid, _windGrid, _activeBlocks, _burnedArea, _fireSteps, _windSteps, _cellUpdates, _timeScale, _frame, _memory;
         float _elapsed;
         int _frames;
 
@@ -40,6 +40,7 @@ namespace FireCA
 
             _fireGrid = AddRow(hud, "Fire Grid");
             _windGrid = AddRow(hud, "Wind Grid");
+            _windNest = AddRow(hud, "Wind Nest");
             _activeBlocks = AddRow(hud, "Active blocks");
             _burnedArea = AddRow(hud, "Burned area");
             _fireSteps = AddRow(hud, "Fire steps");
@@ -87,7 +88,7 @@ namespace FireCA
 
             if (_app == null || _app.Scenario == null)
             {
-                _fireGrid.text = _windGrid.text = _memory.text = NotBuilt;
+                _fireGrid.text = _windGrid.text = _windNest.text = _memory.text = NotBuilt;
                 return;
             }
             SpreadSolver spread = _app.Spread;
@@ -116,7 +117,13 @@ namespace FireCA
             GridSpec g = _app.Scenario.Grid;
             _fireGrid.text = $"{g.FireCells} x {g.FireCells} = {g.FireCellTotal:N0} cells";
             _windGrid.text = $"{g.WindCellsX} x {GridSpec.WindCellsY} x {g.WindCellsZ} = {g.WindCellTotal:N0} cells";
-            _memory.text = $"{_app.Registry.TotalBytes / (1024.0 * 1024.0):F0} MB";
+            WindNest nest = _app.Nest;
+            bool nested = nest != null && nest.Active;
+            _windNest.text = nested
+                ? $"{nest.Domain.Nx} x {nest.Domain.Ny} x {nest.Domain.Nz} cells of {nest.Domain.CellSize:F0} m"
+                : _app.WindNestEnabled ? "not placed" : "off";
+            // The Texture memory holds the textures of the Wind Nest too.
+            _memory.text = $"{(_app.Registry.TotalBytes + (nested ? nest.TotalBytes : 0)) / (1024.0 * 1024.0):F0} MB";
         }
     }
 }

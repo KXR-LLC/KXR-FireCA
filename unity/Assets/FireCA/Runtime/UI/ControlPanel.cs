@@ -142,6 +142,21 @@ namespace FireCA
                 _app.AdvectionSharpness, v => _app.AdvectionSharpness = v);
             DisplaySlider(section, "Vorticity confinement (0 turns the force off)", "vorticity-confinement", 0f, WindSolver.MaxVorticityConfinement,
                 _app.VorticityConfinement, v => _app.VorticityConfinement = v);
+
+            // The Wind Nest (docs/decisions.md, decision D32).
+            DisplayToggle(section, "Wind Nest (finer wind around the fire)", _app.WindNestEnabled, on => _app.WindNestEnabled = on).name = "wind-nest";
+            DisplaySlider(section, "Wind Nest cell size (m), for the next placement", "wind-nest-cell-size", WindNest.MinCellSizeM, WindNest.MaxCellSizeM,
+                _app.WindNestCellSizeM, v => _app.WindNestCellSizeM = v);
+            var row = UiStyle.Row();
+            row.style.marginTop = 4;
+            var move = UiStyle.Button("Move the Wind Nest to the view", () =>
+            {
+                var rig = Object.FindFirstObjectByType<CameraRig>();
+                if (rig != null) _app.PlaceWindNest(new Vector2(rig.Target.x, rig.Target.z));
+            });
+            move.name = "wind-nest-move";
+            row.Add(move);
+            section.Add(row);
         }
 
         // ---- Weather ----

@@ -44,7 +44,7 @@ namespace FireCA
     }
 
     /// <summary>The texture registry. Creates and owns every simulation texture.</summary>
-    public sealed class TextureRegistry : IDisposable
+    public sealed class TextureRegistry : IDisposable, IWindTextures
     {
         public enum GridKind { Fire, Footprint, Wind }
 

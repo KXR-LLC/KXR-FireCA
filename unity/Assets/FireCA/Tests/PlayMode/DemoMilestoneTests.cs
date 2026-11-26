@@ -19,6 +19,8 @@ namespace FireCA.Tests
             yield return null;
             _app = FireCAApp.Instance;
             Assert.IsNotNull(_app);
+            // The criteria of M5 are for the Wind Grid alone. The Wind Nest has the criteria of M7.
+            _app.WindNestEnabled = false;
         }
 
         [Test]
