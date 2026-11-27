@@ -45,6 +45,10 @@ namespace FireCA
                 yield break;
             }
 
+            // The benchmark measures the Wind Grid alone, as in M5. The Wind Nest stays off (decision D32). The app
+            // places the Wind Nest at the first ignition, so the line must run before the first measurement.
+            _app.WindNestEnabled = false;
+
             _json.Append("{\n");
             Field("scenario", _app.Scenario.Id);
             Field("loadSeconds", _app.LastLoadSeconds);
@@ -72,9 +76,18 @@ namespace FireCA
             }
             _json.Append("  ],\n");
 
+            // The paused frame rate with parts of the display off, from the Chute preset. The values show which
+            // part of the display costs the time when no fire burns.
+            _rig.ApplyPreset(2);
+            yield return Wait(SettleSeconds);
+            _app.SmokeVisible = false;
+            yield return Wait(1f);
+            var pausedNoSmoke = new Measurement();
+            yield return Measure(PresetSeconds, pausedNoSmoke);
+            _app.SmokeVisible = true;
+            Field("pausedSmokeOffFps", pausedNoSmoke.MeanFps);
+
             // Burn to a state with fire in the chute, smoke, and many active blocks.
-            // The benchmark measures the Wind Grid alone, as in M5. The Wind Nest stays off (decision D32).
-            _app.WindNestEnabled = false;
             _app.CouplingGain = 1f;
             _app.Clock.SetTimeScale(240f);
             _app.Clock.Playing = true;

@@ -6,6 +6,9 @@ Shader "FireCA/SmokePass"
 
     #pragma vertex Vert
     #pragma target 4.5
+    // The Smoke Pass sets the keyword when a Wind Nest is placed. A branch at run time between the two marches
+    // made the march with no Wind Nest slower (docs/decisions.md, decision D32).
+    #pragma multi_compile _ FIRECA_WIND_NEST
     #pragma only_renderers d3d11 playstation xboxone xboxseries vulkan metal switch
 
     #include "Packages/com.unity.render-pipelines.high-definition/Runtime/RenderPipeline/RenderPass/CustomPass/CustomPassCommon.hlsl"
@@ -64,23 +67,31 @@ Shader "FireCA/SmokePass"
         return saturate(min(min(inside.x, inside.z), nestExtent.y - nestLocal.y) / max(_FireCA_NestOrigin.w, 1.0));
     }
 
-    float SampleSmoke(float3 local, float3 extent)
+    float SampleSmoke(float3 local, float3 extent, bool nest)
     {
         float smoke = _FireCA_Smoke.SampleLevel(fireca_linear_clamp_sampler, local / extent, 0);
-        float3 nestLocal = NestLocal(local);
-        float w = NestWeight(nestLocal);
-        if (w > 0.0)
-            smoke = lerp(smoke, _FireCA_NestSmoke.SampleLevel(fireca_linear_clamp_sampler, nestLocal / (_FireCA_NestGrid.xyz * _FireCA_NestGrid.w), 0), w);
+        // The flag is a constant at each call, so the code with no Wind Nest holds no read of the Wind Nest.
+        // Outside the box, a real branch skips the read.
+        if (nest)
+        {
+            float3 nestLocal = NestLocal(local);
+            float w = NestWeight(nestLocal);
+            [branch] if (w > 0.0)
+                smoke = lerp(smoke, _FireCA_NestSmoke.SampleLevel(fireca_linear_clamp_sampler, nestLocal / (_FireCA_NestGrid.xyz * _FireCA_NestGrid.w), 0), w);
+        }
         return smoke;
     }
 
-    float SampleTurbulenceSpeed(float3 local, float3 extent)
+    float SampleTurbulenceSpeed(float3 local, float3 extent, bool nest)
     {
         float speed = _FireCA_Turbulence.SampleLevel(fireca_linear_clamp_sampler, local / extent, 0).w;
-        float3 nestLocal = NestLocal(local);
-        float w = NestWeight(nestLocal);
-        if (w > 0.0)
-            speed = lerp(speed, _FireCA_NestTurbulence.SampleLevel(fireca_linear_clamp_sampler, nestLocal / (_FireCA_NestGrid.xyz * _FireCA_NestGrid.w), 0).w, w);
+        if (nest)
+        {
+            float3 nestLocal = NestLocal(local);
+            float w = NestWeight(nestLocal);
+            [branch] if (w > 0.0)
+                speed = lerp(speed, _FireCA_NestTurbulence.SampleLevel(fireca_linear_clamp_sampler, nestLocal / (_FireCA_NestGrid.xyz * _FireCA_NestGrid.w), 0).w, w);
+        }
         return speed;
     }
 
@@ -125,33 +136,10 @@ Shader "FireCA/SmokePass"
         return (0.7 * a + 0.3 * b - 0.5) * 3.4;
     }
 
-    float4 FullScreenPass(Varyings varyings) : SV_Target
+    // The march of one ray. The flag is a constant: the variant with no Wind Nest holds no code of the Wind Nest,
+    // and costs what the march cost before the Wind Nest (docs/decisions.md, decision D32).
+    float4 MarchSmoke(float2 pixel, float3 origin, float3 direction, float3 inverse, float3 extent, float tEnter, float tExit, bool nest)
     {
-        UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(varyings);
-        float depth = LoadCameraDepth(varyings.positionCS.xy);
-        PositionInputs posInput = GetPositionInput(varyings.positionCS.xy, _ScreenSize.zw, depth, UNITY_MATRIX_I_VP, UNITY_MATRIX_V);
-        // The scene position is relative to the camera.
-        float sceneDistance = length(posInput.positionWS);
-        float3 direction = posInput.positionWS / max(sceneDistance, 1.0e-4);
-        if (depth == UNITY_RAW_FAR_CLIP_VALUE)
-            sceneDistance = 1.0e9;
-
-        float3 extent = _FireCA_WindGrid.xyz * _FireCA_WindGrid.w;
-        if (extent.x <= 0.0)
-            return float4(0.0, 0.0, 0.0, 0.0);
-        // Ray origin relative to the Wind Grid origin.
-        float3 origin = _WorldSpaceCameraPos - float3(0.0, _FireCA_WindBottomY, 0.0);
-
-        // 1. March from the entry point of the Wind Grid bounds to the exit point, or to the scene depth.
-        float3 inverse = 1.0 / (abs(direction) > 1.0e-6 ? direction : float3(1.0e-6, 1.0e-6, 1.0e-6));
-        float3 t0 = (float3(0.0, 0.0, 0.0) - origin) * inverse;
-        float3 t1 = (extent - origin) * inverse;
-        float3 tNear = min(t0, t1), tFar = max(t0, t1);
-        float tEnter = max(max(tNear.x, tNear.y), max(tNear.z, 0.0));
-        float tExit = min(min(min(tFar.x, tFar.y), tFar.z), sceneDistance);
-        if (tExit <= tEnter)
-            return float4(0.0, 0.0, 0.0, 0.0);
-
         // 2. 96 steps per ray, with a per-pixel jitter of the start point. A ray that crosses the box of the Wind Nest
         // has three parts: before the box, in the box, and after the box. The part in the box has 96 steps of its own.
         float3 nestExtent = _FireCA_NestGrid.xyz * _FireCA_NestGrid.w;
@@ -161,13 +149,16 @@ Shader "FireCA/SmokePass"
         float3 nNear = min(n0, n1), nFar = max(n0, n1);
         float nestEnter = max(max(max(nNear.x, nNear.y), nNear.z), tEnter);
         float nestExit = min(min(min(nFar.x, nFar.y), nFar.z), tExit);
-        bool crossesNest = _FireCA_NestGrid.w > 0.0 && nestExit > nestEnter;
+        bool crossesNest = nest && nestExit > nestEnter;
         int stepsBefore = crossesNest ? SMOKE_STEPS_OUTSIDE : SMOKE_STEPS;
         int stepsNest = crossesNest ? SMOKE_STEPS_NEST : 0;
         int stepsAfter = crossesNest ? SMOKE_STEPS_OUTSIDE : 0;
         float endBefore = crossesNest ? nestEnter : tExit;
         int stepsTotal = stepsBefore + stepsNest + stepsAfter;
-        float jitter = InterleavedGradientNoise(varyings.positionCS.xy, 0);
+        float lengthBefore = (endBefore - tEnter) / stepsBefore;
+        float lengthNest = crossesNest ? (nestExit - nestEnter) / SMOKE_STEPS_NEST : 0.0;
+        float lengthAfter = crossesNest ? (tExit - nestExit) / SMOKE_STEPS_OUTSIDE : 0.0;
+        float jitter = InterleavedGradientNoise(pixel, 0);
         float density = max(_FireCA_SmokeParams.x, 0.0) * SMOKE_EXTINCTION;
         float3 sun = normalize(_FireCA_SunDirection.xyz);
         float exposure = GetCurrentExposureMultiplier();
@@ -182,21 +173,13 @@ Shader "FireCA/SmokePass"
         {
             if (i >= stepsTotal)
                 break;
-            float t, stepLength;
-            if (i < stepsBefore)
+            float t = tEnter + (i + jitter) * lengthBefore;
+            float stepLength = lengthBefore;
+            if (crossesNest && i >= stepsBefore)
             {
-                stepLength = (endBefore - tEnter) / stepsBefore;
-                t = tEnter + (i + jitter) * stepLength;
-            }
-            else if (i < stepsBefore + stepsNest)
-            {
-                stepLength = (nestExit - nestEnter) / stepsNest;
-                t = nestEnter + (i - stepsBefore + jitter) * stepLength;
-            }
-            else
-            {
-                stepLength = (tExit - nestExit) / stepsAfter;
-                t = nestExit + (i - stepsBefore - stepsNest + jitter) * stepLength;
+                bool inNest = i < stepsBefore + stepsNest;
+                stepLength = inNest ? lengthNest : lengthAfter;
+                t = inNest ? nestEnter + (i - stepsBefore + jitter) * lengthNest : nestExit + (i - stepsBefore - stepsNest + jitter) * lengthAfter;
             }
             if (stepLength <= 0.0)
                 continue;
@@ -205,19 +188,19 @@ Shader "FireCA/SmokePass"
             // (docs/decisions.md, decision D31), so the smoke shows the eddies that the Wind Grid cannot hold.
             // A point with no smoke before the move is skipped, which saves the noise for most of the ray.
             float3 samplePoint = p;
-            if (SampleSmoke(p, extent) <= 1.0e-4)
+            if (SampleSmoke(p, extent, nest) <= 1.0e-4)
                 continue;
             if (turbulenceGain > 0.0)
             {
-                float speed = SampleTurbulenceSpeed(p, extent);
+                float speed = SampleTurbulenceSpeed(p, extent, nest);
                 float reach = min(turbulenceGain * speed * SMOKE_TURBULENCE_TIME_S, SMOKE_TURBULENCE_MAX_M);
                 samplePoint += reach * SmokeEddies(p);
             }
-            float smoke = SampleSmoke(samplePoint, extent);
+            float smoke = SampleSmoke(samplePoint, extent, nest);
             if (smoke <= 1.0e-4)
                 continue;
             // The Wind Nest holds eddies of its own, so the billows are weaker in the box.
-            smoke *= Billows(p, billows * lerp(1.0, 0.4, NestWeight(NestLocal(p))));
+            smoke *= Billows(p, billows * lerp(1.0, 0.4, (nest ? NestWeight(NestLocal(p)) : 0.0)));
             if (smoke <= 1.0e-4)
                 continue;
 
@@ -228,13 +211,13 @@ Shader "FireCA/SmokePass"
             for (int k = 0; k < SMOKE_LIGHT_STEPS; k++)
             {
                 lp += sun * lightStep;
-                lightDepth += SampleSmoke(lp, extent) * lightStep;
+                lightDepth += SampleSmoke(lp, extent, nest) * lightStep;
                 lightStep *= 1.5;
             }
             float lightTransmittance = exp(-lightDepth * density);
             // The smoke above shades the ambient light of the sky (docs/decisions.md, decision D30). Two samples
             // straight up give the depth. A floor stands for the light that scatters more than once.
-            float skyDepth = SampleSmoke(p + float3(0.0, 48.0, 0.0), extent) * 80.0 + SampleSmoke(p + float3(0.0, 144.0, 0.0), extent) * 160.0;
+            float skyDepth = SampleSmoke(p + float3(0.0, 48.0, 0.0), extent, nest) * 80.0 + SampleSmoke(p + float3(0.0, 144.0, 0.0), extent, nest) * 160.0;
             float skyTransmittance = lerp(0.2, 1.0, exp(-skyDepth * density));
             float3 scattered = (_FireCA_SunColor.rgb * lightTransmittance * (0.9 / (4.0 * PI)) + _FireCA_SkyColor.rgb * skyTransmittance) * albedo;
 
@@ -274,6 +257,40 @@ Shader "FireCA/SmokePass"
 
         // 7. Blend over the camera color. The color is premultiplied.
         return float4(radiance * exposure, 1.0 - transmittance);
+    }
+
+    float4 FullScreenPass(Varyings varyings) : SV_Target
+    {
+        UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(varyings);
+        float depth = LoadCameraDepth(varyings.positionCS.xy);
+        PositionInputs posInput = GetPositionInput(varyings.positionCS.xy, _ScreenSize.zw, depth, UNITY_MATRIX_I_VP, UNITY_MATRIX_V);
+        // The scene position is relative to the camera.
+        float sceneDistance = length(posInput.positionWS);
+        float3 direction = posInput.positionWS / max(sceneDistance, 1.0e-4);
+        if (depth == UNITY_RAW_FAR_CLIP_VALUE)
+            sceneDistance = 1.0e9;
+
+        float3 extent = _FireCA_WindGrid.xyz * _FireCA_WindGrid.w;
+        if (extent.x <= 0.0)
+            return float4(0.0, 0.0, 0.0, 0.0);
+        // Ray origin relative to the Wind Grid origin.
+        float3 origin = _WorldSpaceCameraPos - float3(0.0, _FireCA_WindBottomY, 0.0);
+
+        // 1. March from the entry point of the Wind Grid bounds to the exit point, or to the scene depth.
+        float3 inverse = 1.0 / (abs(direction) > 1.0e-6 ? direction : float3(1.0e-6, 1.0e-6, 1.0e-6));
+        float3 t0 = (float3(0.0, 0.0, 0.0) - origin) * inverse;
+        float3 t1 = (extent - origin) * inverse;
+        float3 tNear = min(t0, t1), tFar = max(t0, t1);
+        float tEnter = max(max(tNear.x, tNear.y), max(tNear.z, 0.0));
+        float tExit = min(min(min(tFar.x, tFar.y), tFar.z), sceneDistance);
+        if (tExit <= tEnter)
+            return float4(0.0, 0.0, 0.0, 0.0);
+
+#if defined(FIRECA_WIND_NEST)
+        return MarchSmoke(varyings.positionCS.xy, origin, direction, inverse, extent, tEnter, tExit, true);
+#else
+        return MarchSmoke(varyings.positionCS.xy, origin, direction, inverse, extent, tEnter, tExit, false);
+#endif
     }
 
     ENDHLSL

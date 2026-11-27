@@ -20,6 +20,10 @@ namespace FireCA
         /// <summary>The ambient luminance on the smoke at night, in nits.</summary>
         public static readonly Color NightSkyColor = new Color(0.25f, 0.30f, 0.42f);
 
+        // Unity does not allow the creation of a keyword while it loads the pass, so the first Execute creates it.
+        GlobalKeyword _windNestKeyword;
+        bool _hasKeyword;
+
         /// <summary>The material of FireCA/SmokePass.</summary>
         public Material material;
 
@@ -43,6 +47,13 @@ namespace FireCA
             ctx.propertyBlock.SetVector(SunDirectionId, new Vector4(sun.x, Mathf.Max(sun.y, 0.02f), sun.z, 0f));
             ctx.propertyBlock.SetVector(SunColorId, sunColor);
             ctx.propertyBlock.SetVector(SkyColorId, sky);
+            // The shader has one variant with the Wind Nest and one with no Wind Nest (decision D32).
+            if (!_hasKeyword)
+            {
+                _windNestKeyword = GlobalKeyword.Create("FIRECA_WIND_NEST");
+                _hasKeyword = true;
+            }
+            ctx.cmd.SetKeyword(_windNestKeyword, app.Nest != null && app.Nest.Active);
             CoreUtils.DrawFullScreen(ctx.cmd, material, ctx.propertyBlock, shaderPassId: 0);
         }
     }

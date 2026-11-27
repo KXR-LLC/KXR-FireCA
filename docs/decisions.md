@@ -458,7 +458,7 @@ No run holds a NaN value. The default gives 23 percent more mean vorticity and 4
 7. The ground sources of the Wind Nest read Surface Heating and Heat Flux Coarse of the Wind Grid at the place of each column. The smoke source is multiplied by 32 m over the cell size, so a column of the Wind Nest gets the same amount of smoke as a column of the Wind Grid.
 8. The fire sees the Wind Nest. The Surface Wind kernel of the Wind Grid takes, inside the box, the mean of 9 points of the Surface Wind of the Wind Nest. The two values blend between one and two zone widths from the faces. The value is one Wind step old.
 9. The weights of decision D31 are in cells, not in meters: the correct kernel and the vorticity confinement are off up to 2.5 cells above the ground and full from 6.5 cells. For the Wind Grid that is 80 m and 208 m, as before. For the Wind Nest at 12 m it is 30 m and 78 m. The ground part of the turbulence speed is multiplied by the cell size over 32 m.
-10. The Smoke Pass and the Wind Particles read the Wind Nest inside the box, with a blend over the zone width at the lateral faces and the top face. A ray of the Smoke Pass that crosses the box has 40 steps before the box, 96 steps in the box, and 40 steps after it. The billows are 60 percent weaker in the box.
+10. The Smoke Pass and the Wind Particles read the Wind Nest inside the box, with a blend over the zone width at the lateral faces and the top face. A ray of the Smoke Pass that crosses the box has 40 steps before the box, 96 steps in the box, and 40 steps after it. The billows are 60 percent weaker in the box. The shader of the Smoke Pass has two variants, and the keyword `FIRECA_WIND_NEST` selects the variant with the Wind Nest when a Wind Nest is placed.
 11. The app places the Wind Nest around the first ignition. The Control Panel has a toggle, a cell size slider, and a button that moves the Wind Nest to the point that the camera looks at. A move starts the Wind Nest again from the state of the Wind Grid.
 12. The tests of M1 to M6 and the benchmark of decision D25 run with no Wind Nest. The Wind Nest has the criteria of M7.
 
@@ -476,6 +476,13 @@ No run holds a NaN value. The default gives 23 percent more mean vorticity and 4
 | 6. Texture memory of the Wind Nest at 12 m | 315 MB. The Stats HUD shows 1725 MB with the Wind Nest |
 
 Criterion 2 first copied criterion 1 of M3: a value after the project kernel under 10 percent of the value before the pressure kernel. The Wind Nest gave 18 to 33 percent, with 30 to 60 iterations and over-relaxation factors from 1.6 to 1.85. The step of the Wind Nest is half as long and starts from a field with little divergence (0.0004 1/s), so the ratio is high while the value is low. The criterion is now the value.
+
+Release 0.3.0 showed two faults in the standalone benchmark.
+
+- The Smoke Pass took 5.0 ms with no Wind Nest, up from 3.8 ms in release 0.2.0. The march had one code path, with the reads of the Wind Nest behind a test at run time. The shader now has a variant with no code of the Wind Nest. With that variant the Smoke Pass takes 4.3 ms, and the player of release 0.2.0 takes 4.3 ms on the same day.
+- The paused frame rates were 289 fps to 336 fps, down from 328 fps to 368 fps. The benchmark turned the Wind Nest off after the paused measurements, and the app had placed the Wind Nest at the first ignition. The benchmark now turns the Wind Nest off at the start, and the paused frame rates are 329 fps to 368 fps. With a Wind Nest placed and no smoke, the Smoke Pass takes about 0.9 ms, against about 0.4 ms with no Wind Nest.
+
+The benchmark report has a new field, `pausedSmokeOffFps`: the paused frame rate from the Chute preset with the smoke off.
 
 Cost on the RTX 5090: one Wind step with the 2 steps of the Wind Nest takes 12.4 ms to 16.8 ms, against 5.7 ms for the Wind Grid alone. That is under the limit of 3 times the cost that M7 sets. In the Editor at 1280 x 720 and a time scale of 60, the frame rate is about 235 frames per second with the Wind Nest and about 300 without. At a requested time scale of 1000, the achieved time scale is about 120 to 155 with the Wind Nest and about 340 without.
 
