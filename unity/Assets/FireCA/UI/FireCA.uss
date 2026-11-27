@@ -1,0 +1,219 @@
+/* The style sheet of the Control Panel and the Stats HUD (docs/decisions.md, decision D35).
+   The colors and sizes come from the component catalog "KXR-FireCA UI Component Catalog".
+   The theme does not import the default theme of Unity, so every control here is a custom element. */
+
+.fc-root {
+    -unity-font: url("project://database/Assets/FireCA/UI/Fonts/B612-Regular.ttf");
+    color: #E8F0F7;
+    font-size: 13px;
+}
+
+.fc-text { margin: 0; padding: 0; white-space: normal; }
+.fc-bold { -unity-font: url("project://database/Assets/FireCA/UI/Fonts/B612-Bold.ttf"); }
+/* A value. Every digit of B612 has one width, so a readout does not move when its value changes. */
+.fc-mono { -unity-font: url("project://database/Assets/FireCA/UI/Fonts/B612-Regular.ttf"); }
+.fc-mono-bold { -unity-font: url("project://database/Assets/FireCA/UI/Fonts/B612-Bold.ttf"); }
+.fc-dim { color: #9FB4C8; }
+.fc-fire { color: #F6A63A; }
+.fc-error { color: #FF7A5C; }
+.fc-small { font-size: 11px; }
+.fc-caps {
+    -unity-font: url("project://database/Assets/FireCA/UI/Fonts/B612-Bold.ttf");
+    font-size: 11px;
+    letter-spacing: 1.6px;
+    color: #9FB4C8;
+}
+
+.fc-row { flex-direction: row; align-items: center; }
+.fc-between { justify-content: space-between; }
+.fc-rule { height: 1px; background-color: #2E4C6B; margin-top: 10px; margin-bottom: 10px; }
+
+.fc-card {
+    background-color: rgba(15, 32, 50, 0.94);
+    border-width: 1px;
+    border-color: #2E4C6B;
+    border-radius: 6px;
+}
+
+/* Button */
+.fc-button {
+    height: 32px;
+    padding-left: 14px;
+    padding-right: 14px;
+    margin-top: 8px;
+    border-width: 1px;
+    border-color: #2E4C6B;
+    border-radius: 4px;
+    background-color: #17304A;
+    flex-direction: row;
+    align-items: center;
+    justify-content: center;
+    flex-grow: 1;
+    flex-basis: 0;
+}
+.fc-button:hover { background-color: #223F5E; border-color: #5CC8EA; }
+.fc-button:active { background-color: #163A4E; }
+.fc-button:disabled { background-color: #0F2032; border-color: #223F5E; }
+.fc-button:disabled > .fc-text { color: #6F879E; }
+.fc-button--primary { background-color: #5CC8EA; border-color: #5CC8EA; }
+.fc-button--primary:hover { background-color: #86D8F1; }
+.fc-button--primary > .fc-text { color: #07131E; -unity-font: url("project://database/Assets/FireCA/UI/Fonts/B612-Bold.ttf"); }
+.fc-button-gap { width: 8px; }
+
+/* Tool toggle of the Tool Bar */
+.fc-tool {
+    height: 44px;
+    min-width: 44px;
+    margin-right: 8px;
+    border-width: 1px;
+    border-color: #2E4C6B;
+    border-radius: 6px;
+    background-color: rgba(15, 32, 50, 0.94);
+    flex-direction: row;
+    align-items: center;
+    justify-content: center;
+}
+.fc-tool--label { padding-left: 10px; padding-right: 14px; }
+.fc-tool:hover { border-color: #9FB4C8; }
+.fc-tool > .fc-text { margin-left: 8px; color: #9FB4C8; -unity-font: url("project://database/Assets/FireCA/UI/Fonts/B612-Bold.ttf"); }
+.fc-tool--on { background-color: #163A4E; border-color: #5CC8EA; }
+.fc-tool--on > .fc-text { color: #5CC8EA; }
+.fc-tool--fire.fc-tool--on { background-color: #3A2A14; border-color: #F6A63A; }
+.fc-tool--fire.fc-tool--on > .fc-text { color: #F6A63A; }
+.fc-tool:disabled { border-color: #223F5E; }
+
+.fc-bar-rule { width: 1px; height: 28px; background-color: #2E4C6B; margin-left: 4px; margin-right: 12px; }
+
+/* Time scale group of the Tool Bar */
+.fc-time {
+    height: 44px;
+    margin-right: 8px;
+    border-width: 1px;
+    border-color: #2E4C6B;
+    border-radius: 6px;
+    background-color: rgba(15, 32, 50, 0.94);
+    flex-direction: row;
+    align-items: center;
+}
+.fc-time-play {
+    width: 44px;
+    height: 42px;
+    border-right-width: 1px;
+    border-color: #2E4C6B;
+    border-top-left-radius: 5px;
+    border-bottom-left-radius: 5px;
+    align-items: center;
+    justify-content: center;
+}
+.fc-time-play--on { background-color: #163A4E; }
+.fc-time-play:hover { background-color: #223F5E; }
+.fc-time-step { width: 36px; height: 42px; align-items: center; justify-content: center; }
+.fc-time-step:hover { background-color: #223F5E; }
+.fc-time-value { width: 64px; -unity-text-align: middle-center; font-size: 15px; }
+
+.fc-clock { height: 44px; padding-left: 14px; padding-right: 14px; flex-direction: row; align-items: center; }
+.fc-clock-time { font-size: 17px; margin-left: 10px; }
+
+/* Switch */
+.fc-switch { flex-direction: row; align-items: center; justify-content: space-between; min-height: 24px; margin-top: 8px; }
+.fc-switch > .fc-text { flex-shrink: 1; }
+.fc-switch-track { width: 36px; height: 20px; border-radius: 10px; background-color: #223F5E; flex-shrink: 0; margin-left: 10px; }
+.fc-switch-knob { position: absolute; left: 3px; top: 3px; width: 14px; height: 14px; border-radius: 7px; background-color: #9FB4C8; }
+.fc-switch:hover > .fc-switch-track { background-color: #2E4C6B; }
+.fc-switch--on > .fc-switch-track { background-color: #5CC8EA; }
+.fc-switch--on:hover > .fc-switch-track { background-color: #86D8F1; }
+.fc-switch--on > .fc-switch-track > .fc-switch-knob { left: 19px; background-color: #07131E; }
+.fc-switch--fire.fc-switch--on > .fc-switch-track { background-color: #F6A63A; }
+
+/* Slider */
+.fc-slider { margin-top: 8px; }
+.fc-slider-head { flex-direction: row; justify-content: space-between; align-items: flex-end; }
+.fc-slider-head > .fc-dim { font-size: 12px; flex-shrink: 1; }
+.fc-slider-value { font-size: 12px; margin-left: 8px; flex-shrink: 0; }
+.fc-slider-area { height: 20px; }
+.fc-slider-rail { position: absolute; left: 8px; right: 8px; top: 0; bottom: 0; }
+.fc-slider-track { position: absolute; left: -8px; right: -8px; top: 8px; height: 4px; border-radius: 2px; background-color: #223F5E; }
+.fc-slider-fill { position: absolute; left: -8px; top: 8px; height: 4px; border-radius: 2px; background-color: #5CC8EA; }
+.fc-slider-thumb {
+    position: absolute;
+    top: 2px;
+    width: 16px;
+    height: 16px;
+    margin-left: -8px;
+    border-radius: 8px;
+    border-width: 2px;
+    border-color: #0B1724;
+    background-color: #E8F0F7;
+}
+.fc-slider-area:hover > .fc-slider-rail > .fc-slider-thumb { background-color: #5CC8EA; }
+
+/* List */
+.fc-select {
+    height: 32px;
+    margin-top: 8px;
+    padding-left: 10px;
+    padding-right: 8px;
+    border-width: 1px;
+    border-color: #2E4C6B;
+    border-radius: 4px;
+    background-color: #17304A;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+}
+.fc-select:hover { border-color: #5CC8EA; }
+.fc-select-blocker { position: absolute; left: 0; top: 0; right: 0; bottom: 0; }
+.fc-select-popup {
+    position: absolute;
+    padding: 4px;
+    border-width: 1px;
+    border-color: #5CC8EA;
+    border-radius: 4px;
+    background-color: #0F2032;
+}
+.fc-select-option { height: 28px; padding-left: 8px; padding-right: 8px; border-radius: 3px; flex-direction: row; align-items: center; justify-content: space-between; }
+.fc-select-option > .fc-text { color: #9FB4C8; }
+.fc-select-option:hover { background-color: #17304A; }
+.fc-select-option:hover > .fc-text { color: #E8F0F7; }
+.fc-select-option--on { background-color: #163A4E; }
+.fc-select-option--on > .fc-text { color: #E8F0F7; }
+.fc-select-dot { width: 6px; height: 6px; border-radius: 3px; background-color: #5CC8EA; }
+
+/* Tabs */
+.fc-tabs-head { flex-direction: row; border-bottom-width: 1px; border-color: #2E4C6B; padding-left: 6px; padding-right: 6px; }
+.fc-tab { height: 36px; padding-left: 10px; padding-right: 10px; flex-direction: row; align-items: center; border-bottom-width: 2px; border-color: rgba(0, 0, 0, 0); }
+.fc-tab > .fc-text { font-size: 12px; letter-spacing: 1.2px; color: #9FB4C8; -unity-font: url("project://database/Assets/FireCA/UI/Fonts/B612-Bold.ttf"); }
+.fc-tab:hover > .fc-text { color: #E8F0F7; }
+.fc-tab--on { border-color: #5CC8EA; }
+.fc-tab--on > .fc-text { color: #E8F0F7; }
+.fc-tab-icon { margin-right: 8px; }
+
+/* Control Panel */
+.fc-panel { position: absolute; left: 16px; top: 72px; width: 900px; }
+.fc-panel-head { flex-direction: row; align-items: center; justify-content: space-between; padding-left: 20px; padding-right: 12px; padding-top: 12px; padding-bottom: 4px; }
+.fc-panel-title { font-size: 18px; }
+.fc-close { width: 32px; height: 32px; border-radius: 4px; align-items: center; justify-content: center; }
+.fc-close:hover { background-color: #17304A; }
+.fc-columns { flex-direction: row; padding-left: 20px; padding-right: 20px; padding-top: 16px; padding-bottom: 20px; }
+.fc-column { flex-grow: 1; flex-basis: 0; }
+.fc-column-gap { width: 28px; }
+.fc-group-gap { height: 1px; background-color: #2E4C6B; margin-top: 16px; margin-bottom: 14px; }
+.fc-help { font-size: 11px; color: #9FB4C8; margin-top: 6px; }
+
+/* Stats HUD */
+.fc-hud { position: absolute; right: 16px; top: 16px; width: 340px; }
+.fc-hud-body { padding-left: 16px; padding-right: 16px; padding-top: 12px; padding-bottom: 14px; }
+.fc-readout { flex-direction: row; justify-content: space-between; margin-top: 3px; }
+.fc-readout > .fc-text { font-size: 12px; }
+.fc-readout > .fc-dim { flex-shrink: 0; }
+.fc-readout > .fc-mono { -unity-text-align: middle-right; flex-shrink: 1; margin-left: 10px; }
+.fc-scenario-name { font-size: 15px; margin-top: 2px; }
+.fc-wind-speed { font-size: 22px; }
+.fc-wind-unit { font-size: 12px; margin-left: 6px; margin-bottom: 3px; }
+
+/* Legend */
+.fc-legend { position: absolute; left: 16px; bottom: 16px; width: 280px; padding-left: 16px; padding-right: 16px; padding-top: 12px; padding-bottom: 12px; }
+.fc-legend-name { font-size: 14px; margin-top: 2px; margin-bottom: 6px; }
+.fc-legend-bar { height: 12px; border-radius: 2px; margin-top: 2px; }
+.fc-swatch { width: 12px; height: 12px; border-radius: 2px; margin-right: 8px; }
+.fc-swatch-row { flex-direction: row; align-items: center; margin-top: 2px; }

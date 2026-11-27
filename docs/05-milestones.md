@@ -203,3 +203,57 @@ Acceptance criteria:
 7. With the Wind Nest off, every acceptance test of M1 to M6 passes with no change.
 
 The performance targets of M5 are for the Wind Grid alone. The Wind Nest should add no more than 3 times the cost of one Wind step.
+
+## M8: Vegetation
+
+The Vegetation shows the fuel as trees, shrubs, and dead wood, and shows the fire on them. Decision D33 in `decisions.md` holds the design.
+
+Build:
+
+1. Build 11 Plant Models and the Leaf Atlas with the Blender script `tools/blender/plant_models.py`. Each Plant Model has three levels of detail (decision D34).
+2. Place the Plants from the Fuel layer, with two or three Plant Models for each fuel model that has woody plants.
+3. Give each Plant a random height, width, and rotation.
+4. Pick the Plants in the view and the level of detail of each Plant in a compute kernel.
+5. Draw the Plants with one draw call per level of detail.
+6. Show the three states of a Plant: normal, burning, and burnt.
+7. Draw flames and smoke on the burning Plants.
+8. Add the Vegetation controls to the Control Panel and the Plants row to the Stats HUD.
+
+Acceptance criteria:
+
+1. A Plant stands only on a fuel code that has Plant Models. Fuel models 1 and 3 and the fuel codes that do not burn have no Plants.
+2. Each fuel model with Plants has two or three Plant Models, and the placement uses each of them.
+3. The height of each Plant is in the range of its Plant Model. The width multiplier is from 0.8 to 1.25. The rotations have no preferred direction.
+4. The placement gives the same Plants on every run, and each Plant stands on the ground.
+5. Each Plant Model has three levels of detail, each with fewer triangles than the level before. The far level has at most 30 triangles.
+6. A Plant is normal before the Arrival Time of its cell, burning for the burn time, and burnt after it.
+7. From the Overview preset, no Plant is at the full level of detail. At 60 m from a stand of trees, the full level holds Plants, the middle level holds more, and the far level holds the most.
+8. The buffers of the Vegetation use 10 MB to 200 MB on `south-canyon`.
+9. A fire of 60 m radius puts more than 20 Plants in the list of burning Plants.
+10. With the Vegetation on, the frame rate with the Sim Clock paused is 120 frames/s or more from the Overview preset and the Chute preset, at 2560 x 1440 on one RTX 5090.
+11. Every acceptance test of M1 to M7 passes with the Vegetation on.
+
+## M9: Interface
+
+The interface gets a Tool Bar, a Control Panel with tabs, a Stats HUD with tabs, an orbit tool for the camera, and its own graphics. Decision D35 in `decisions.md` holds the design.
+
+Build:
+
+1. Load `south-canyon` at startup.
+2. Build the custom controls and the style sheet from the component catalog.
+3. Build the Tool Bar with the gear button and the toggles for the ignite tool, the Sim Clock, and the orbit tool.
+4. Move the controls of the Control Panel into three tabs: Tools, Weather, Wind, Fire, and Display.
+5. Split the Stats HUD into the Conditions tab and the Performance tab.
+6. Add the orbit tool to the camera.
+
+Acceptance criteria:
+
+1. The scene loads `south-canyon` at startup.
+2. The Tool Bar holds the gear button, the ignite toggle, the time scale group, and the orbit toggle. The Control Panel is closed at startup, and the gear button opens it.
+3. The Control Panel has the tabs Tools, Weather, Wind, Fire, and Display. The Tools tab holds the Scenario, time, ignition, and slice tool controls.
+4. The Stats HUD has the tabs Conditions and Performance. The Conditions tab shows the Scenario, the wind, the Sim Clock, the time scale, and the areas that burn and that are burnt.
+5. The UI holds no control of the default theme of Unity, and every text uses B612.
+6. The two step buttons move the time scale to the next value of the list in `04-visualization.md`.
+7. With a time for one orbit of 6 hours, the orbit tool turns the camera by 90 degrees in 1.5 hours of the Sim Clock. The look-at point, the distance, and the height of the camera do not change. The orbit starts at the position of the camera.
+8. In the fly mode, the orbit tool orbits the terrain point at the center of the view.
+9. Every acceptance test of M0 to M8 passes with the new interface.

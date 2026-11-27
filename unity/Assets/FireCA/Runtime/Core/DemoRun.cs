@@ -117,7 +117,7 @@ namespace FireCA
             _app.Clock.Playing = false;
             CurrentState = State.SpinUp;
             BeatIndex = 0;
-            if (_camera != null) { _camera.SetMode(CameraRig.Mode.Orbit); _camera.ApplyPreset(0); }
+            if (_camera != null) { _camera.SetAutoOrbit(false); _camera.SetMode(CameraRig.Mode.Orbit); _camera.ApplyPreset(0); }
         }
 
         /// <summary>Stops the demo run and pauses the Sim Clock.</summary>

@@ -35,7 +35,7 @@ The project uses Unity 6000.3.16f1 and HDRP 17.3.0.
 2. Run `Tools > FireCA > Setup > Run All Setup Steps`. The step writes the generated assets and the elevation file of `synthetic-canyon-01`.
 3. Run the EditMode tests and the PlayMode tests in the Test Runner window.
 
-The elevation file of `south-canyon` is 64 MB and is not in the repository. `data/south-canyon/README.md` describes how to fetch the source data, and `tools/import_canyon.py` writes the Scenario from the source data.
+The scene loads `south-canyon` at startup. The elevation file of `south-canyon` is 64 MB and is not in the repository. Without the file, the scene loads `synthetic-canyon-01`. `data/south-canyon/README.md` describes how to fetch the source data, and `tools/import_canyon.py` writes the Scenario from the source data.
 
 ## Documentation
 

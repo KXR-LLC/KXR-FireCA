@@ -48,6 +48,9 @@ namespace FireCA
             // The benchmark measures the Wind Grid alone, as in M5. The Wind Nest stays off (decision D32). The app
             // places the Wind Nest at the first ignition, so the line must run before the first measurement.
             _app.WindNestEnabled = false;
+            // The benchmark measures the targets of M5 with no Vegetation, and the Vegetation on its own (decision D33).
+            var vegetation = FindFirstObjectByType<Vegetation>();
+            if (vegetation != null) vegetation.Visible = false;
 
             _json.Append("{\n");
             Field("scenario", _app.Scenario.Id);
@@ -117,6 +120,25 @@ namespace FireCA
             Field("smokeOffFps", smokeOff.MeanFps);
             Field("burnedAreaHa", (float)_app.Spread.BurnedAreaHa);
             Field("activeBlocks", _app.Spread.ActiveBlocks);
+
+            // Vegetation: the frame rate with the Plants and the burned area, with the Sim Clock paused.
+            if (vegetation != null)
+            {
+                vegetation.Visible = true;
+                _rig.ApplyPreset(0);
+                yield return Wait(SettleSeconds);
+                var plantsOverview = new Measurement();
+                yield return Measure(PresetSeconds, plantsOverview);
+                _rig.ApplyPreset(2);
+                yield return Wait(SettleSeconds);
+                var plantsChute = new Measurement();
+                yield return Measure(PresetSeconds, plantsChute);
+                Field("vegetationPlants", vegetation.PlantCount);
+                Field("vegetationDrawn", vegetation.DrawnTotal);
+                Field("vegetationOverviewFps", plantsOverview.MeanFps);
+                Field("vegetationChuteFps", plantsChute.MeanFps);
+                vegetation.Visible = false;
+            }
 
             // Compute passes, timed with the GPU idle between the passes.
             _app.SchedulerEnabled = false;

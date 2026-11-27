@@ -26,6 +26,7 @@ Material:
     m_Ints: []
     m_Floats:
     - _Brightness: 0.9
+    - _SizeM: 0
     - _StreakSeconds: 0.12
     m_Colors: []
   m_BuildTextureStacks: []

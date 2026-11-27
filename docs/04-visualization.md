@@ -59,6 +59,20 @@ The Control Panel selects one Overlay or none. Each scalar Overlay uses the same
 2. The air temperature and relative humidity Overlays must call the same HLSL functions that the Weather Model calls.
 3. The Overlay opacity must have a slider from 0 to 1, with a default of 0.8.
 
+## Vegetation
+
+The Vegetation draws trees, shrubs, and dead wood on the Terrain Mesh. Decision D33 in `decisions.md` holds the design, and milestone M8 in `05-milestones.md` holds the acceptance criteria.
+
+1. Read the Plant Models from `Assets/FireCA/Models/PlantModels.bytes` and the Leaf Atlas from `Assets/FireCA/Models/LeafAtlas.png`. The script `tools/blender/plant_models.py` writes both files (decision D34).
+2. Place the Plants from the Fuel layer when a Scenario loads. A grass fuel model and a fuel code that does not burn have no Plants.
+3. Give each Plant a random height in the range of its Plant Model, a random width, and a random rotation.
+4. In each frame, a compute kernel must pick the Plants in the view and the level of detail of each Plant.
+5. Draw all Plants of one level of detail with one draw call.
+6. Read the state of a Plant from the Arrival Time of the cell under the Plant: normal, burning, or burnt.
+7. Draw flames and smoke on each burning Plant within 3500 m of the camera.
+
+**Note:** The Vegetation is a display of the Fuel layer. The Spread Solver and the Wind Solver do not read the Vegetation. The model has no crown fire and no canopy sheltering (`00-overview.md`, scope).
+
 ## Smoke Pass
 
 The Smoke Pass is an HDRP Custom Pass at the Before Post Process injection point. The Smoke Pass draws a full-screen ray march through the bounds of the Wind Grid.
@@ -104,19 +118,41 @@ The slice plane is a vertical quad that cuts the Wind Grid and shows one field i
 1. Provide an orbit mode and a fly mode.
 2. Provide four preset views: Overview, Canyon Mouth, Chute, and Top Down.
 3. Keep the camera above the terrain surface.
+4. Provide an orbit tool. The orbit tool turns the camera around the look-at point of the camera, from the position that the camera has when the tool starts. One orbit takes a set time of the Sim Clock, with a default of 6 hours (decision D35).
 
 ## Control Panel
 
-The Control Panel is a UI Toolkit panel on the left edge of the screen. The user can collapse the Control Panel.
+The UI is a UI Toolkit document with three parts on the main screen: the Tool Bar at the top left, the Stats HUD at the top right, and the legend of the selected Overlay at the bottom left. Decision D35 in `decisions.md` holds the design, and milestone M9 in `05-milestones.md` holds the acceptance criteria.
 
-| Section | Controls |
+The Tool Bar holds the items below.
+
+| Item | Function |
 |---|---|
-| Scenario | Scenario list, Load, Reset |
-| Time | Play, Pause, time scale slider (1 to 1000, logarithmic), Sim Clock readout as day and solar time |
-| Ignition | Ignite tool toggle, Clear Fire |
-| Weather | Background wind speed, background wind direction, `tempMaxC`, `tempMinC`, `rhMinPct`, "Use Scenario weather" toggle |
-| Fire | `couplingGain` slider (0 to 2), live fuel moisture |
-| Display | Overlay list, Overlay opacity, smoke toggle and density, Wind Particles toggle and count, slice plane controls, camera presets |
+| Gear button | Opens and closes the Control Panel |
+| Ignite toggle | Turns the ignite tool on and off |
+| Time scale group | A play and pause toggle for the Sim Clock, and two buttons that step the time scale through 1, 2, 5, 10, 30, 60, 120, 300, 600, and 1000 |
+| Orbit toggle | Turns the orbit tool of the camera on and off |
+| Clock | The day and the solar time of the Sim Clock |
+
+The Control Panel is a panel under the Tool Bar. The Control Panel is closed at startup. The Control Panel has three tabs.
+
+| Tab | Group | Controls |
+|---|---|---|
+| Tools | Scenario | Scenario list, Load, Reset, demo run |
+| Tools | Ignition | Ignite tool switch, Clear Fire |
+| Tools | Time | Sim Clock readout as day and solar time, Play, Pause, time scale slider (1 to 1000, logarithmic) |
+| Tools | Camera | Orbit tool switch, time for one orbit (0.25 h to 24 h of the Sim Clock), camera presets, camera mode |
+| Tools | Slice tool | Slice plane switch, field list, cut list, position |
+| Weather, Wind, Fire | Weather | "Use Scenario weather" switch, background wind speed, background wind direction, `tempMaxC`, `tempMinC`, `rhMinPct` |
+| Weather, Wind, Fire | Wind Solver | Advection sharpness, vorticity confinement |
+| Weather, Wind, Fire | Wind Nest | Wind Nest switch, cell size, "Move the Wind Nest to the view" |
+| Weather, Wind, Fire | Fire | `couplingGain` slider (0 to 2), live fuel moisture |
+| Display | Overlay | Overlay list, Overlay opacity, fuel color smoothing, Ground Image opacity |
+| Display | Vegetation | Vegetation switch, density, draw distance, effects switch, shadow switch |
+| Display | Smoke | Smoke switch, density, darkness, billows, turbulence |
+| Display | Wind Particles | Wind Particles switch, count, size |
+
+The UI does not use the default theme of Unity. The style sheet `Assets/FireCA/UI/FireCA.uss` and the custom controls in `Runtime/UI/UiControls.cs` draw every control. The typeface is B612.
 
 1. A manual weather value must override the Scenario value until the user turns "Use Scenario weather" on.
 2. Reset must reload the Scenario and set the Sim Clock to zero.
@@ -125,12 +161,32 @@ The Control Panel is a UI Toolkit panel on the left edge of the screen. The user
 
 ## Stats HUD
 
-The Stats HUD is a compact panel in the top right corner. The Stats HUD updates four times per second.
+The Stats HUD is a compact panel in the top right corner. The Stats HUD updates four times per second. The Stats HUD has two tabs: Conditions and Performance. The Conditions tab is on show at startup.
+
+The Conditions tab has the readouts below.
+
+| Readout | Content |
+|---|---|
+| Scenario | Id, extent, and elevation range |
+| Background wind | Speed, direction, and a dial with an arrow that points the way the air moves |
+| Sim Clock | Day and solar time |
+| Elapsed | Hours and minutes from the start of the Scenario |
+| Time scale | Requested value and achieved value |
+| Air temperature | Degrees Celsius at the reference elevation |
+| Relative humidity | Percent at the reference elevation |
+| Sun elevation | Degrees |
+| Fuel moisture | 10-h, 100-h, and live values, in percent |
+| Area burning | Hectares, from a GPU count of flaming cells |
+| Area burnt | Hectares, from a GPU count of ignited cells |
+| Burning Plants in view | Count of burning Plants that the Vegetation draws |
+
+The Performance tab has the readouts below.
 
 | Readout | Content |
 |---|---|
 | Fire Grid | Cell count |
 | Wind Grid | Cell count |
+| Plants | Count of Plants drawn, count of Plants in the Scenario, and count of burning Plants |
 | Active blocks | Count of blocks with the Active Mask set |
 | Burned area | Hectares, from a GPU count of ignited cells |
 | Fire steps | Steps per second and GPU milliseconds per step |

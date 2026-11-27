@@ -496,3 +496,146 @@ The fire changes with the Wind Nest. In a run of 4 simulated hours on `south-can
 - The Wind Nest does not follow the fire. The user moves it, and a move loses the eddies of the Wind Nest for about a minute of simulated time.
 - The slope wind criteria of M3 are not run on the Wind Nest.
 - The slice plane and the Overlays show the Wind Grid only.
+
+## D33: The Vegetation
+
+**Question.** The user asked for vegetation on the terrain: a level of detail system, plants by fuel type with two or three base models each, the states normal, burning, and burnt with flames and smoke, and random size and rotation. Small plants and grasses are out for now. A Unity Terrain with its tree system was set aside before the work: its trees live on the CPU, and the fire state lives on the GPU. How does the vegetation work?
+
+**Answer.**
+
+1. Three new terms. The Vegetation is the system. A Plant is one tree, one shrub, or one pile of dead wood. A Plant Model is one of 11 shapes: three conifers, two hardwoods, three shrubs, two piles of logs, and a snag.
+2. Decision D34 replaces this answer and answer 3. The Plant Models are built in code (`PlantModels.cs`), so the repository holds no model files. A Plant Model has a height of 1. Each vertex holds a position, a normal, a part (bark, foliage, or dead wood), and a shade value.
+3. Each Plant Model has three levels of detail. Every Plant Model has the same vertex count at one level, with zero vertices as padding, so one draw call renders all Plant Models of that level. The counts are 1338, 336, and 90 vertices.
+4. The placement is in `VegetationRules.cs`. Each site of 4 m x 4 m holds at most one Plant, at a random position in the site. The fuel code of the cell under the position gives the share of sites with a Plant and the Plant Models. A noise field with a size of 55 m makes clumps and gaps. The placement reads the Fuel layer and the Elevation layer only, so it is the same on every run.
+
+| Fuel model | Share of sites | Plant Models and heights |
+|---|---|---|
+| 1 Short grass, 3 Tall grass | 0 | None |
+| 2 Timber grass and understory | 0.07 | Pine 10 m to 20 m, round hardwood 6 m to 11 m, young conifer 3 m to 7 m |
+| 4 Chaparral | 0.60 | Tall shrub 1.8 m to 3.2 m, low shrub 1.2 m to 2.2 m, tufted shrub 0.8 m to 1.5 m |
+| 5 Brush | 0.45 | Low shrub 0.7 m to 1.4 m, tufted shrub 0.5 m to 1.0 m, tall shrub 1.0 m to 1.8 m |
+| 6 Dormant brush | 0.45 | Tall shrub 0.9 m to 1.7 m, low shrub 0.7 m to 1.4 m, both with brown foliage |
+| 7 Southern rough | 0.45 | Tall shrub 1.0 m to 1.9 m, low shrub 0.8 m to 1.5 m, pine 9 m to 16 m |
+| 8 Closed timber litter | 0.36 | Fir 14 m to 26 m, pine 12 m to 22 m, young conifer 4 m to 9 m |
+| 9 Hardwood litter | 0.30 | Round hardwood 9 m to 16 m, tall hardwood 12 m to 20 m, pine 12 m to 20 m |
+| 10 Timber litter and understory | 0.45 | Fir 16 m to 30 m, young conifer 3 m to 9 m, low shrub 0.8 m to 1.6 m |
+| 11 Light slash | 0.25 | Crossed logs, tufted shrub, snag 5 m to 12 m |
+| 12 Medium slash | 0.35 | Crossed logs, log pile, snag 5 m to 12 m |
+| 13 Heavy slash | 0.50 | Crossed logs, log pile, snag 6 m to 14 m |
+
+5. Each Plant has a random height in the range of the table, a width multiplier from 0.8 to 1.25, a rotation from 0 to 360 degrees, and a seed that varies its color.
+6. In each frame, the kernel `CullKernel` of `Vegetation.compute` tests each Plant against the view of the camera and the draw distance. The height of the Plant on the screen picks the level of detail: 170 pixels or more for level 0, 34 pixels or more for level 1, and 1 pixel or more for level 2. Between 1 pixel and 3 pixels, the seed of a Plant decides if it is drawn, so the far Vegetation thins with no flicker. The kernel writes one list per level and one list of burning Plants.
+7. Three indirect draw calls render the Plants (`Vegetation.shader`). The shader is a hand-written HDRP forward pass with a depth pass and a shadow pass. Its light is the sun, the sky color of decision D30, and the light of the fire from Heat Flux Coarse. The Plants at levels 0 and 1 cast shadows.
+8. The state of a Plant comes from the Arrival Time of the cell under it. A Plant is normal before the Arrival Time. A Plant is burning for the larger of the residence time of the cell and the burn time of its Plant Model: 150 s for a tree, 30 s to 50 s for a shrub, 300 s to 480 s for dead wood. A Plant is burnt after that.
+9. The fire changes a Plant by height. The fire takes the foliage up to 2 times the flame length of the cell. The fire scorches the foliage brown up to the crown scorch height of Van Wagner (1973), with the fireline intensity from the flame length of Byram (1959): `hs = 6.03 L^1.449`, in meters. The bark chars up to 3 times the flame length plus 0.5 m. A low fire under tall trees leaves green crowns with black trunks. A brush fire leaves bare stems.
+10. A burning Plant has embers at the burning edge of the foliage and in the cracks of the charred wood. The embers fade over `emberFadeS` after the flames.
+11. Two more draw calls render 4 flame quads and 4 smoke puffs on each burning Plant within 3500 m (`VegetationFire.shader`). A flame is a noise pattern that scrolls up inside a shape that narrows to the top. Where the fire takes more than half of the height of a Plant, the flames stand above the Plant. The smoke puffs rise and drift with the Surface Wind. The smoke is dark while the Plant flames and pale for 900 s after that.
+12. The wind bends the Plants. The bend comes from the Surface Wind and grows with the height above the ground.
+13. The Display section of the Control Panel has the toggle "Vegetation", the sliders "Vegetation density" and "Vegetation draw distance (m)", and the toggles "Flames and smoke on burning plants" and "Plant shadows". The Stats HUD has the row "Plants".
+14. The benchmark of decision D25 measures the targets of M5 with no Vegetation. It then measures the frame rate with the Vegetation from two presets.
+
+**Reason.** Plants as GPU instances with a state from the Arrival Time need no readback and no work on the CPU per Plant. The fuel code is the only vegetation data that a Scenario has, so the Fuel layer places the Plants. Plant Models from code keep the repository free of model files and their licenses.
+
+**Results.** On `south-canyon` the placement gives 1,464,286 Plants, and the buffers use 68 MB. On `synthetic-canyon-01` it gives 545,735 Plants. From the Overview preset on `south-canyon`, 190,097 Plants are drawn, all at level 2. At 60 m from a stand of trees, 114 Plants are at level 0, 1942 at level 1, and 126,890 at level 2. A fire of 60 m radius puts 303 Plants in the list of burning Plants. The benchmark of the Windows player at 2560 x 1440 on one RTX 5090 runs on `synthetic-canyon-01` after a burn of 45 simulated minutes, with the Sim Clock paused and the smoke on: 275 frames/s from the Overview preset and 143 frames/s from the Chute preset with the Vegetation. The Chute preset gives 156 frames/s with no Vegetation, so the Vegetation costs 0.6 ms there. The 49 EditMode tests and the 44 PlayMode tests pass with the Vegetation on.
+
+**Open points.**
+
+- The Plant Models are simple shapes with a noise cutout for the leaves. Decision D34 closes this point.
+- The Vegetation is a display only. The model has no crown fire. The scorch rule above is a display rule: it does not change the spread.
+- The Plants receive no shadows. A factor from the slope under a Plant dims the sun on a slope that faces away from it.
+- The Plants do not have the fog of the sky.
+- The flame length of a burnt cell changes with the weather after the fire, so the scorch height on a burnt Plant drifts by a small amount.
+- A cell with no Plant shows the fire with the fire glow of the terrain shader only.
+
+**References.**
+
+- Van Wagner, C. E. 1973. Height of crown scorch in forest fires. Canadian Journal of Forest Research 3: 373 to 378.
+- Byram, G. M. 1959. Combustion of forest fuels. In Forest Fire: Control and Use, edited by K. P. Davis. McGraw-Hill.
+
+## D34: Plant Models and the Leaf Atlas from Blender
+
+**Question.** The Plant Models of decision D33 are cones, balls, and tubes that code builds. They do not look like plants at a short distance. The user asked for models from Blender. Blender 5.1.2 is on the build machine and runs with no window. It has no add-on that makes trees. How do the Plant Models come from Blender?
+
+**Answer.**
+
+1. One script builds everything: `tools/blender/plant_models.py`. The command is `blender -b --python tools/blender/plant_models.py -- --out unity/Assets/FireCA/Models`. The repository holds the script and its two output files, so a build of the project does not need Blender.
+2. The script writes `PlantModels.bytes`. The file holds the 11 Plant Models at three levels of detail as lists of triangles. `PlantModels.Load` reads the file and pads each level to one vertex count, as before. `PlantModels.cs` has no shapes in code now.
+3. A vertex has 12 floats: position, part, normal, shade, position in the Leaf Atlas, flutter, and leaf seed. The flutter is 0 at the base of a leaf card and 1 at its tip. The leaf seed is one random value per leaf card.
+4. The script draws four leaf pictures as flat meshes: a fir bough with about 6000 needles, a pine tuft, a twig with broad leaves, and a shrub spray. Cycles renders the pictures from above into the Leaf Atlas, `LeafAtlas.png`, 2048 x 2048 pixels. The red channel is the brightness with a mean of 0.5, the green channel is 1 on a twig, the blue channel is a random value per leaf, and the alpha channel cuts the leaves. The script spreads the colors into the empty pixels, so the edge of a leaf has no dark fringe.
+5. At levels 0 and 1, the foliage of a Plant Model is leaf cards: flat strips with one picture of the Leaf Atlas. The normal of a leaf card points out of the crown, and both faces use it, so the crown has smooth light. The shade of a vertex falls toward the middle of the crown.
+6. The shapes at level 0 are the items below.
+
+| Plant Model | Shape | Triangles at levels 0, 1, 2 |
+|---|---|---|
+| Fir (ConiferA) | A trunk with 95 boughs on a spiral. Each bough is a branch and two crossed leaf cards that droop. | 1414, 216, 12 |
+| Pine (ConiferB) | A bare trunk and 24 branches that sweep up, each with four needle tufts | 836, 192, 22 |
+| Young conifer (ConiferC) | The fir with 65 boughs and a wide crown that reaches the ground | 994, 156, 12 |
+| Round hardwood (HardwoodA) | A trunk, 5 limbs, 20 twigs, and 340 leaf cards in a wide crown | 932, 220, 28 |
+| Tall hardwood (HardwoodB) | A trunk, 5 limbs, 20 twigs, and 220 leaf cards in a narrow crown | 692, 270, 28 |
+| Tall shrub (ShrubA) | 9 forked stems from one base with 108 leaf cards | 378, 70, 30 |
+| Low shrub (ShrubB) | 13 forked stems from one base with 156 leaf cards | 546, 98, 30 |
+| Tufted shrub (ShrubC) | 14 upright sprays, each of two crossed leaf cards | 140, 20, 4 |
+| Crossed logs (LogA) | 3 bent logs with end caps and branch stubs | 312, 72, 18 |
+| Log pile (LogB) | 5 bent logs and a stump | 570, 102, 30 |
+| Snag | A dead trunk with a broken top and 7 branch stubs | 200, 43, 9 |
+
+7. Level 1 keeps each second bough, branch, or stem and makes the leaf cards larger. Level 2 is the shell of decision D33 with no texture: a cone, a ball, or a dome, with 30 triangles at most.
+8. The padded vertex counts are 4242, 810, and 90 per Plant Model. The buffer of Plant Models uses 2.7 MB.
+9. `Vegetation.shader` reads the Leaf Atlas for each triangle with a position in the atlas. The alpha cuts the leaves at 0.4. The import of the texture keeps the share of solid pixels in each mip level, so a far tree does not thin out. The fire rules of decision D33 do not change: the fire takes, scorches, and chars a Plant by height.
+10. The setup step `Tools > FireCA > Setup > Run All Setup Steps` sets the import settings of the Leaf Atlas and gives both files to the Vegetation component.
+11. With `--preview <folder>`, the script also renders one picture set of the Plant Models at each level of detail and saves the scene as `PlantModels.blend`. These files stay out of the repository.
+
+**Reason.** A script gives the same Plant Models on every run, shows each change in a diff, and needs no model files with a license from another party. Leaf cards with a rendered leaf picture are the common method for trees in real-time graphics: they give the shape of real foliage for a few hundred triangles. The half width of each Plant Model stays near the value of decision D33, so the flames, the smoke, and the placement do not change.
+
+**Results.** The script runs in 10 seconds. The 49 EditMode tests and the 44 PlayMode tests pass with the Plant Models from Blender. On `south-canyon` the buffers of the Vegetation use 69.6 MB. The benchmark of the Windows player at 2560 x 1440 on one RTX 5090 runs on `synthetic-canyon-01` after a burn of 45 simulated minutes, with the Sim Clock paused and the smoke on: 267 frames/s from the Overview preset and 140 frames/s from the Chute preset with the Vegetation. The Chute preset gives 153 frames/s with no Vegetation, so the Vegetation costs 0.6 ms there, as it did with the Plant Models of decision D33.
+
+**Open points.**
+
+- The Plant Models come from rules in a script, not from the hand of an artist. The pine and the shrubs are the least natural.
+- The bark has a color and no texture.
+- The leaf cards show as flat cards from a distance of a few meters.
+- Level 2 has no texture, so a Plant changes its look by a small amount between level 1 and level 2.
+- The open points of decision D33 on shadows, fog, and crown fire stay open.
+
+## D35: The Tool Bar, tabs, the orbit tool, and the component catalog
+
+**Question.** The user asked for six changes to the interface. Load `south-canyon` at startup. Add an orbit tool for the camera with a setting for the time of one orbit, in hours, with a default of 6. Replace the side bar with a gear icon that opens a panel with tabs. Split the Stats HUD into two tabs. Put toggles for ignition, time scale, and orbit on the main screen. Replace the default graphics of Unity with new components from a design canvas, with colors and a font that suit meteorology. How does the interface work?
+
+**Answer.**
+
+1. The scene loads `south-canyon` at startup. The elevation file of `south-canyon` is not in the repository, so a clone can lack it. When the startup Scenario does not load, the scene loads `synthetic-canyon-01`. The command line argument `-scenario <id>` selects another Scenario. The benchmark command of `CLAUDE.md` passes `-scenario synthetic-canyon-01`, because the performance targets of M5 apply to that Scenario.
+2. One new term. The Tool Bar is the row of buttons at the top left of the screen. The panel that the gear button opens keeps the name Control Panel. The word Overlay stays the name of a data layer on the Terrain Mesh only.
+3. The Tool Bar holds the gear button, the ignite toggle, the time scale group, the orbit toggle, and the clock. The time scale group has a play and pause toggle and two buttons that step the time scale through 1, 2, 5, 10, 30, 60, 120, 300, 600, and 1000.
+4. The Control Panel has the three tabs that the user named. Tools holds the Scenario, ignition, time, camera, and slice tool controls. Weather, Wind, Fire holds the weather, Wind Solver, Wind Nest, and fire controls. Display holds the Overlay, Vegetation, smoke, and Wind Particles controls. Each tab has three columns, so no tab scrolls.
+5. The legend of the selected Overlay moved from the Control Panel to the bottom left of the main screen. The legend is on show while the Control Panel is closed.
+6. The Stats HUD has two tabs. Performance is the list of readouts that the Stats HUD had before. Conditions shows the Scenario, a wind dial, the Sim Clock, the time scale, the weather, the fuel moisture, the area that burns, the area that is burnt, and the count of burning Plants. The area that burns is the count of flaming cells of the Spread Solver times the cell area.
+7. The orbit tool is in `CameraRig.cs`. The user chose hours of the Sim Clock for the setting. In each frame, the tool turns the camera by 360 degrees times the Sim Clock advance divided by the time for one orbit. At 60x, the default of 6 hours gives one orbit in 6 minutes. The orbit stops while the Sim Clock is paused. The orbit starts at the position of the camera and goes around the look-at point. In the orbit mode, the look-at point is the orbit target. In the fly mode, the look-at point is the terrain point at the center of the view, and the tool switches the camera to the orbit mode. The user can rotate, pan, and zoom while the tool runs. A switch to the fly mode and the start of a demo run turn the tool off. The setting has a range of 0.25 hours to 24 hours.
+8. The component catalog is the design canvas "KXR-FireCA UI Component Catalog". It has four boards: foundations, controls, the main screen, and the Control Panel. The catalog is the source of the colors, the sizes, and the icon paths.
+
+| Color | Value | Use |
+|---|---|---|
+| Night | `#0B1724` | Ring of a slider thumb, text on a cyan button |
+| Panel | `#0F2032` at 94 percent | Ground of each card |
+| Raised | `#17304A` | Button, list |
+| Track | `#223F5E` | Track of a slider and a switch, hover |
+| Line | `#2E4C6B` | Border, rule |
+| Dim text | `#9FB4C8` | Name of a control, caption |
+| Text | `#E8F0F7` | Value, title |
+| Wind | `#5CC8EA` | Every active control, the wind arrow |
+| Fire | `#F6A63A` | Ignite tool, area that burns |
+| Alert | `#FF7A5C` | Failed validation check |
+
+9. The typeface is B612, which Airbus made for cockpit displays. The user chose it. The files `B612-Regular.ttf` and `B612-Bold.ttf` are in `Assets/FireCA/UI/Fonts` with the SIL Open Font License. Every digit of B612 has one width, so a readout does not move when its value changes. B612 Mono is not in the project: its wide punctuation left gaps in values such as `5.0 m/s`.
+10. The theme `FireCARuntimeTheme.tss` imports `Assets/FireCA/UI/FireCA.uss` only. It does not import the default theme of Unity. The UI uses no `Button`, `Toggle`, `Slider`, `DropdownField`, or `ScrollView` of Unity. `UiControls.cs` has the custom controls: button, tool toggle, switch, slider, list, and tabs.
+11. An icon is one path of lines and curves on a grid of 24 x 24. `UiIcon.cs` draws the path with the vector painter of UI Toolkit, so the project holds no icon image. The wind dial is drawn the same way.
+
+**Reason.** A panel that covers the left edge of the view hides the canyon for the whole run. A bar with the three tools that a presenter uses most keeps the view free. A dark blue ground with one cool accent and one warm accent follows the charts and instrument displays of meteorology: cyan for air and wind, amber for fire. Custom controls remove the gray look of the default theme and need no image files.
+
+**Results.** The 49 EditMode tests and the 51 PlayMode tests pass. Seven of the PlayMode tests are the tests of M9 in `InterfaceMilestoneTests.cs`. The orbit tool turns the camera by 90.00 degrees in 1.5 hours of the Sim Clock with a time for one orbit of 6 hours. The benchmark of the Windows player at 2560 x 1440 on one RTX 5090 runs on `synthetic-canyon-01` with the new interface: 361 frames/s from the Overview preset with the Sim Clock paused and no Vegetation, and 268 frames/s from the Overview preset and 135 frames/s from the Chute preset with the Vegetation.
+
+**Open points.**
+
+- A slider has no text field. The user sets a value with a drag.
+- The Control Panel has no keyboard shortcut.
+- The Tool Bar and the Control Panel have a fixed size in the reference resolution of 1920 x 1080. A window narrower than 1300 pixels can put the Control Panel under the Stats HUD.
+- The orbit tool does not avoid a ridge between the camera and the look-at point. The camera stays above the terrain.

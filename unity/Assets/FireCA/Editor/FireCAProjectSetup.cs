@@ -28,6 +28,8 @@ namespace FireCA.Editor
         const string TemplateSkyProfilePath = "Assets/Settings/SkyandFogSettingsProfile.asset";
 
         public const string DemoScenario = "synthetic-canyon-01";
+        /// <summary>The Scenario that the scene loads at startup (docs/decisions.md, decision D35).</summary>
+        public const string StartupScenario = "south-canyon";
         public const string TestScenario = "test-canyon-512";
 
         [MenuItem("Tools/FireCA/Setup/Run All Setup Steps")]
@@ -113,13 +115,20 @@ namespace FireCA.Editor
             app.WindCompute = AssetDatabase.LoadAssetAtPath<ComputeShader>("Assets/FireCA/Shaders/Compute/Wind.compute");
             app.TerrainMaterial = terrainMaterial;
             app.SunLight = sun != null ? sun.GetComponent<Light>() : null;
-            app.StartupScenario = DemoScenario;
+            app.StartupScenario = StartupScenario;
             if (appObject.GetComponent<FrameBenchmark>() == null) appObject.AddComponent<FrameBenchmark>();
             if (appObject.GetComponent<DemoRun>() == null) appObject.AddComponent<DemoRun>();
             var particles = appObject.GetComponent<WindParticles>() ?? appObject.AddComponent<WindParticles>();
             particles.ParticleCompute = AssetDatabase.LoadAssetAtPath<ComputeShader>("Assets/FireCA/Shaders/Compute/WindParticles.compute");
             particles.ParticleMaterial = EnsureMaterial(SettingsFolder + "/WindParticles.mat", "Assets/FireCA/Shaders/Graphs/WindParticles.shader");
             EditorUtility.SetDirty(particles);
+            var vegetation = appObject.GetComponent<Vegetation>() ?? appObject.AddComponent<Vegetation>();
+            vegetation.VegetationCompute = AssetDatabase.LoadAssetAtPath<ComputeShader>("Assets/FireCA/Shaders/Compute/Vegetation.compute");
+            vegetation.PlantMaterial = EnsureMaterial(SettingsFolder + "/Vegetation.mat", "Assets/FireCA/Shaders/Graphs/Vegetation.shader");
+            vegetation.FireMaterial = EnsureMaterial(SettingsFolder + "/VegetationFire.mat", "Assets/FireCA/Shaders/Graphs/VegetationFire.shader");
+            vegetation.PlantModelData = AssetDatabase.LoadAssetAtPath<TextAsset>(PlantModels.DataPath);
+            vegetation.LeafAtlas = EnsureLeafAtlas();
+            EditorUtility.SetDirty(vegetation);
             var slice = appObject.GetComponent<SlicePlane>() ?? appObject.AddComponent<SlicePlane>();
             slice.SliceMaterial = EnsureMaterial(SettingsFolder + "/SlicePlane.mat", "Assets/FireCA/Shaders/Graphs/SlicePlane.shader");
             EditorUtility.SetDirty(slice);
@@ -155,6 +164,32 @@ namespace FireCA.Editor
             EditorBuildSettings.scenes = new[] { new EditorBuildSettingsScene(ScenePath, true) };
             AssetDatabase.SaveAssets();
             Debug.Log($"[FireCA] Built the scene {ScenePath}.");
+        }
+
+        /// <summary>Sets the import settings of the Leaf Atlas (decision D34) and returns the texture.</summary>
+        static Texture2D EnsureLeafAtlas()
+        {
+            var importer = AssetImporter.GetAtPath(PlantModels.LeafAtlasPath) as TextureImporter;
+            if (importer == null)
+            {
+                Debug.LogError($"[FireCA] {PlantModels.LeafAtlasPath} is missing. Run tools/blender/plant_models.py.");
+                return null;
+            }
+            // The channels are data: brightness, wood mask, and a random value per leaf. The alpha channel cuts the leaves.
+            importer.textureType = TextureImporterType.Default;
+            importer.sRGBTexture = false;
+            importer.alphaSource = TextureImporterAlphaSource.FromInput;
+            importer.alphaIsTransparency = false;
+            importer.mipmapEnabled = true;
+            importer.mipMapsPreserveCoverage = true;
+            importer.alphaTestReferenceValue = 0.4f;
+            importer.wrapMode = TextureWrapMode.Clamp;
+            importer.filterMode = FilterMode.Trilinear;
+            importer.anisoLevel = 8;
+            importer.maxTextureSize = 2048;
+            importer.textureCompression = TextureImporterCompression.CompressedHQ;
+            importer.SaveAndReimport();
+            return AssetDatabase.LoadAssetAtPath<Texture2D>(PlantModels.LeafAtlasPath);
         }
 
         static Material EnsureMaterial(string materialPath, string shaderPath)
@@ -194,9 +229,12 @@ namespace FireCA.Editor
 
         static PanelSettings EnsurePanelSettings()
         {
-            if (!File.Exists(ThemePath))
+            // The theme holds the style sheet of the project only. It does not import the default theme of Unity
+            // (decision D35).
+            const string themeText = "@import url(\"project://database/Assets/FireCA/UI/FireCA.uss\");\nVisualElement {}\n";
+            if (!File.Exists(ThemePath) || File.ReadAllText(ThemePath) != themeText)
             {
-                File.WriteAllText(ThemePath, "@import url(\"unity-theme://default\");\nVisualElement {}\n");
+                File.WriteAllText(ThemePath, themeText);
                 AssetDatabase.ImportAsset(ThemePath);
             }
             var theme = AssetDatabase.LoadAssetAtPath<ThemeStyleSheet>(ThemePath);

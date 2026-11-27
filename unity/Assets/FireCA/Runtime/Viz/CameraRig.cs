@@ -31,6 +31,57 @@ namespace FireCA
         public Func<Vector2, bool> PointerBlocked;
         public event Action ModeChanged;
 
+        // ---- orbit tool (docs/decisions.md, decision D35) ----
+
+        public const float MinOrbitPeriodHours = 0.25f;
+        public const float MaxOrbitPeriodHours = 24f;
+        public const float DefaultOrbitPeriodHours = 6f;
+
+        /// <summary>True while the orbit tool turns the camera around its look-at point.</summary>
+        public bool AutoOrbit { get; private set; }
+        /// <summary>The time of one full orbit, in hours of the Sim Clock.</summary>
+        public float OrbitPeriodHours
+        {
+            get => _orbitPeriodHours;
+            set => _orbitPeriodHours = Mathf.Clamp(value, MinOrbitPeriodHours, MaxOrbitPeriodHours);
+        }
+        public event Action AutoOrbitChanged;
+
+        float _orbitPeriodHours = DefaultOrbitPeriodHours;
+        double _orbitClockS;
+
+        /// <summary>
+        /// Starts or stops the orbit tool. The orbit starts at the current position of the camera and goes around
+        /// the look-at point of the camera. In the fly mode, the look-at point is the terrain point at the center
+        /// of the view.
+        /// </summary>
+        public void SetAutoOrbit(bool on)
+        {
+            if (on == AutoOrbit) return;
+            if (on && CurrentMode == Mode.Fly)
+            {
+                if (_app != null && _app.RaycastTerrain(new Ray(transform.position, Forward()), out Vector3 hit))
+                    _distance = Mathf.Max(Vector3.Distance(transform.position, hit), 1f);
+                _target = transform.position + Forward() * _distance;
+                CurrentMode = Mode.Orbit;
+                ModeChanged?.Invoke();
+            }
+            AutoOrbit = on;
+            if (_app != null) _orbitClockS = _app.Clock.Seconds;
+            AutoOrbitChanged?.Invoke();
+        }
+
+        // Turns the camera by the share of one orbit that the Sim Clock moved since the last frame.
+        void AdvanceAutoOrbit()
+        {
+            double now = _app.Clock.Seconds;
+            double elapsed = now - _orbitClockS;
+            _orbitClockS = now;
+            // A Scenario load puts the Sim Clock back to zero.
+            if (elapsed <= 0.0) return;
+            _yawDeg = Mathf.Repeat(_yawDeg + (float)(elapsed / (_orbitPeriodHours * 3600.0) * 360.0), 360f);
+        }
+
         readonly List<Preset> _presets = new List<Preset>();
         FireCAApp _app;
         Camera _camera;
@@ -77,6 +128,7 @@ namespace FireCA
         public void SetMode(Mode mode)
         {
             if (mode == CurrentMode) return;
+            if (mode == Mode.Fly) SetAutoOrbit(false);
             if (mode == Mode.Orbit)
             {
                 // Put the orbit target on the view ray, at the current orbit distance.
@@ -89,7 +141,14 @@ namespace FireCA
         public void ApplyPreset(int index)
         {
             if (index < 0 || index >= _presets.Count) return;
-            Preset p = _presets[index];
+            LookFrom(_presets[index]);
+        }
+
+        /// <summary>Puts the camera at a position, with a look at a point.</summary>
+        public void LookFrom(Vector3 position, Vector3 lookAt) => LookFrom(new Preset("", position, lookAt));
+
+        void LookFrom(Preset p)
+        {
             Vector3 dir = p.LookAt - p.Position;
             _distance = Mathf.Max(dir.magnitude, 1f);
             dir /= _distance;
@@ -116,7 +175,13 @@ namespace FireCA
         {
             var mouse = Mouse.current;
             var keyboard = Keyboard.current;
-            if (mouse == null || keyboard == null || _app == null || _app.Scenario == null) return;
+            if (_app == null || _app.Scenario == null) return;
+            if (AutoOrbit) AdvanceAutoOrbit();
+            if (mouse == null || keyboard == null)
+            {
+                if (AutoOrbit) { PlaceOrbit(); KeepAboveTerrain(); }
+                return;
+            }
 
             if (keyboard.tabKey.wasPressedThisFrame) ToggleMode();
             if (keyboard.digit1Key.wasPressedThisFrame) ApplyPreset(0);

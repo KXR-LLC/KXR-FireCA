@@ -38,6 +38,8 @@ Documentation in the repository follows `D:\Projects_26\ClaudeWritingGuides\mark
 | Input | Input System 1.19.0 |
 | Editor automation | `com.unity.pipeline` 1.0.1, driven by the `unity` command line tool |
 | Scene | `unity/Assets/FireCA/Scenes/FireCA.unity` |
+| UI typeface | B612 Regular and Bold, SIL Open Font License, in `unity/Assets/FireCA/UI/Fonts` (decision D35) |
+| Blender | 5.1.2, needed only to build the Plant Models and the Leaf Atlas again (decision D34) |
 
 The steps below rebuild the generated assets of the project.
 
@@ -45,8 +47,14 @@ The steps below rebuild the generated assets of the project.
 2. Run `Tools > FireCA > Setup > Run All Setup Steps`. The step writes both Scenarios, the terrain material, the UI panel settings, the sky profile, and the scene.
 3. Run the EditMode tests and the PlayMode tests in the Test Runner window.
 
+The command below builds the Plant Models and the Leaf Atlas again (decision D34 in `docs/decisions.md`). The repository holds the two output files, so the command is necessary only after a change to the script.
+
+```text
+blender -b --python tools/blender/plant_models.py -- --out unity/Assets/FireCA/Models
+```
+
 The command below measures the frame rate in a standalone player (decision D8 in `docs/decisions.md`).
 
 ```text
-FireCA.exe -popupwindow -screen-fullscreen 0 -screen-width 2560 -screen-height 1440 -firecaBench <report path>
+FireCA.exe -popupwindow -screen-fullscreen 0 -screen-width 2560 -screen-height 1440 -scenario synthetic-canyon-01 -firecaBench <report path>
 ```

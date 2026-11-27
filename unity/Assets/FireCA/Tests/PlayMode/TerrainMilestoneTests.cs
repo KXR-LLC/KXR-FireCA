@@ -15,6 +15,7 @@ namespace FireCA.Tests
     {
         const string SceneName = "FireCA";
         const string DemoScenario = "synthetic-canyon-01";
+        const string StartupScenario = "south-canyon";
         const string TestScenario = "test-canyon-512";
 
         FireCAApp _app;
@@ -44,7 +45,8 @@ namespace FireCA.Tests
         public IEnumerator SyntheticCanyon_LoadsInUnder10Seconds()
         {
             Assert.IsNull(_app.LastError, _app.LastError);
-            Assert.AreEqual(DemoScenario, _app.Scenario.Id, "The scene must load synthetic-canyon-01 at startup.");
+            Assert.AreEqual(StartupScenario, _app.Scenario.Id, "The scene must load south-canyon at startup.");
+            Assert.IsTrue(_app.LoadScenario(DemoScenario), _app.LastError);
             float startupSeconds = _app.LastLoadSeconds;
 
             float before = Time.realtimeSinceStartup;
@@ -113,7 +115,7 @@ namespace FireCA.Tests
                 yield return null;
                 Assert.AreEqual(check, _app.LastFailedCheck);
                 StringAssert.Contains(check.ToString(), panel.StatusText, "The Control Panel must show the name of the failed check.");
-                Assert.AreEqual(DemoScenario, _app.Scenario.Id, "A rejected load must leave the loaded Scenario in place.");
+                Assert.AreEqual(StartupScenario, _app.Scenario.Id, "A rejected load must leave the loaded Scenario in place.");
             }
 
             // A valid Scenario clears the message.

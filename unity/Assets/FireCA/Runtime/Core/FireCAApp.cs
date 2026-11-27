@@ -35,7 +35,9 @@ namespace FireCA
         [SerializeField] ComputeShader windCompute;
         [SerializeField] Material terrainMaterial;
         [SerializeField] Light sunLight;
-        [SerializeField] string startupScenario = "synthetic-canyon-01";
+        [SerializeField] string startupScenario = "south-canyon";
+        /// <summary>The Scenario that the scene loads when the startup Scenario has no elevation file.</summary>
+        public const string FallbackScenario = "synthetic-canyon-01";
 
         public TextureRegistry Registry { get; } = new TextureRegistry();
         public Overlays Overlays { get; private set; }
@@ -162,7 +164,15 @@ namespace FireCA
         void Start()
         {
             string id = CommandLine.Value("-scenario") ?? startupScenario;
-            if (!string.IsNullOrEmpty(id)) LoadScenario(id);
+            if (string.IsNullOrEmpty(id)) return;
+            // The elevation file of south-canyon is not in the repository, so a clone can lack it (decision D35).
+            bool present = File.Exists(Path.Combine(ScenarioLoader.ScenariosRoot, id, "elevation.r32"));
+            if (!present && id != FallbackScenario)
+            {
+                Debug.LogWarning($"[FireCA] The Scenario {id} has no elevation file. The scene loads {FallbackScenario}.");
+                id = FallbackScenario;
+            }
+            LoadScenario(id);
         }
 
         void OnDestroy()

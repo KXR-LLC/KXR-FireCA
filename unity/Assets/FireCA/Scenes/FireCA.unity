@@ -133,6 +133,7 @@ GameObject:
   - component: {fileID: 23101264}
   - component: {fileID: 23101263}
   - component: {fileID: 23101265}
+  - component: {fileID: 23101266}
   m_Layer: 0
   m_Name: FireCA
   m_TagString: Untagged
@@ -170,7 +171,7 @@ MonoBehaviour:
   windCompute: {fileID: 7200000, guid: 0daaa8e3ce235f94f8fade17e5366558, type: 3}
   terrainMaterial: {fileID: 2100000, guid: a011da2e95568414daea5fc0e739b2f7, type: 2}
   sunLight: {fileID: 157207113}
-  startupScenario: synthetic-canyon-01
+  startupScenario: south-canyon
 --- !u!4 &23101262
 Transform:
   m_ObjectHideFlags: 0
@@ -232,6 +233,23 @@ MonoBehaviour:
   m_EditorClassIdentifier: FireCA.Runtime::FireCA.DemoRun
   IntroSeconds: 14
   OrbitDegPerSecond: 3
+--- !u!114 &23101266
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 23101259}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 62f7b1a66dd3e4444b94a4f566387057, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: FireCA.Runtime::FireCA.Vegetation
+  vegetationCompute: {fileID: 7200000, guid: 38b014d99103ef944937cee35e232a91, type: 3}
+  plantMaterial: {fileID: 2100000, guid: a3f85709ae3f9b54ab47058d46ab259c, type: 2}
+  fireMaterial: {fileID: 2100000, guid: 6d2144108bedc14428b0ed3aecb9fb89, type: 2}
+  plantModelData: {fileID: 4900000, guid: cc82bfdc93400ac488580446042646c7, type: 3}
+  leafAtlas: {fileID: 2800000, guid: 7f599babee7b36246a175e423ea951cb, type: 3}
 --- !u!1 &157207112
 GameObject:
   m_ObjectHideFlags: 0

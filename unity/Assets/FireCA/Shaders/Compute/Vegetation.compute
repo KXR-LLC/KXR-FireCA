@@ -1,0 +1,61 @@
+// Vegetation: picks the Plants to draw in one frame and the level of detail of each one.
+// See docs/decisions.md, decision D33.
+#pragma kernel CullKernel
+
+#include "Assets/FireCA/Shaders/Graphs/Vegetation.hlsl"
+
+StructuredBuffer<Plant> _Plants;
+AppendStructuredBuffer<uint> _Lod0;
+AppendStructuredBuffer<uint> _Lod1;
+AppendStructuredBuffer<uint> _Lod2;
+AppendStructuredBuffer<uint> _Burning;
+
+uint _PlantCount;
+float4 _Planes[6];          // frustum planes of the camera: normal, distance. A point inside has a positive value
+float4 _CameraPosition;     // world position, m
+float _PixelsPerMeter;      // the size on the screen of 1 m at a distance of 1 m, pixels
+float4 _LodPixels;          // x: smallest height of level 0, y: of level 1, z: of level 2, w: the height where thinning starts (pixels)
+float _MaxDistance;         // m
+float _Density;             // the share of the Plants to draw, 0 to 1
+float _EffectDistance;      // flames and smoke are drawn up to this distance, m
+float _SmolderS;            // a Plant gives off smoke for this time after its flames, s
+
+[numthreads(256, 1, 1)]
+void CullKernel(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= _PlantCount)
+        return;
+    Plant p = _Plants[id.x];
+    if (frac(p.seed * 7.31 + 0.137) >= _Density)
+        return;
+
+    int model = (int)(p.model + 0.5);
+    float radius = p.height * max(0.6, Vegetation_HalfWidth[model] * p.widthScale * 1.2) + 1.0;
+    float3 center = p.position + float3(0.0, 0.5 * p.height, 0.0);
+    for (int k = 0; k < 6; k++)
+    {
+        if (dot(_Planes[k].xyz, center) + _Planes[k].w < -radius)
+            return;
+    }
+    float dist = max(distance(center, _CameraPosition.xyz), 1.0);
+    if (dist > _MaxDistance)
+        return;
+
+    PlantFire fire = Vegetation_Fire(p);
+    if (fire.age >= 0.0 && fire.age < fire.burnS + _SmolderS && dist < _EffectDistance)
+        _Burning.Append(id.x);
+
+    // The height of the Plant on the screen picks the level of detail. A Plant near the size of a pixel is
+    // drawn or not by its seed, so the far Vegetation thins with no flicker.
+    float pixels = p.height * max(1.0, 1.6 * Vegetation_HalfWidth[model] * p.widthScale) * _PixelsPerMeter / dist;
+    if (pixels < _LodPixels.z)
+        return;
+    if (pixels < _LodPixels.w && frac(p.seed * 3.71 + 0.5) > (pixels - _LodPixels.z) / max(_LodPixels.w - _LodPixels.z, 1.0e-3))
+        return;
+    if (pixels >= _LodPixels.x)
+        _Lod0.Append(id.x);
+    else if (pixels >= _LodPixels.y)
+        _Lod1.Append(id.x);
+    else
+        _Lod2.Append(id.x);
+}

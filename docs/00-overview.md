@@ -31,6 +31,10 @@ Each term has one meaning in the project. Use each term exactly as written.
 | Surface Wind | The 256 x 256 texture that holds the horizontal wind at 6.1 m above the ground. |
 | Wind Nest | The second grid of the Wind Solver, with cells of 8 m to 16 m, over a box around the fire. The Wind Grid feeds the Wind Nest at the faces of the box. |
 | Turbulence | The Wind Grid texture that holds the vorticity and the turbulence speed of each cell. The turbulence speed is an estimate of the speed of the eddies that are too small for the Wind Grid. |
+| Vegetation | The trees, shrubs, and dead wood that the display draws on the Terrain Mesh. The Fuel layer places the Vegetation. The Vegetation is a display only. |
+| Plant | One tree, one shrub, or one pile of dead wood of the Vegetation. |
+| Plant Model | One of the 11 shapes that a Plant can have. Each Plant Model has three levels of detail. A Blender script builds the Plant Models. |
+| Leaf Atlas | The texture with the four leaf pictures that the foliage of the Plant Models uses. The Blender script renders the Leaf Atlas. |
 | Sim Clock | The simulation time, in seconds from the start of the Scenario. |
 | Step Scheduler | The CPU component that decides how many solver steps run in each frame. |
 | Reference Model | The CPU implementation of the Rothermel equations in C#, used for tests. |
@@ -39,8 +43,9 @@ Each term has one meaning in the project. Use each term exactly as written.
 | Overlay | One data layer drawn in color on the Terrain Mesh. |
 | Wind Particles | The GPU particles that trace the wind field. |
 | Smoke Pass | The HDRP Custom Pass that draws the smoke volume. |
-| Control Panel | The runtime UI for Scenario, time, weather, ignition, and display controls. |
-| Stats HUD | The runtime readout of cell counts, step times, and time scale. |
+| Tool Bar | The row of buttons at the top left of the screen: the gear button and the toggles for the ignite tool, the Sim Clock, and the orbit tool. |
+| Control Panel | The runtime UI for Scenario, time, weather, ignition, and display controls. The gear button of the Tool Bar opens the Control Panel. |
+| Stats HUD | The runtime readout at the top right of the screen. One tab shows the conditions of the run, and one tab shows cell counts, step times, and time scale. |
 
 ## Scope
 
